@@ -340,7 +340,92 @@ bool PdfFile::load(const std::string& path) {
 
     std::sort(objects.begin(), objects.end(),
               [](const Object& a, const Object& b) { return a.offset < b.offset; });
+    parseXrefAndTrailer();
     return true;
+}
+
+void PdfFile::parseXrefAndTrailer() {
+    // Locate the "xref" keyword (classic xref table).
+    const char* const xrefTok = "xref";
+    const size_t xrefPos = data_.find(xrefTok);
+    if (xrefPos == std::string::npos) {
+        trailer.hasXref = false;
+        return;
+    }
+
+    Reader r{data_, xrefPos + 4};
+    r.skipWs();
+    while (r.pos < data_.size()) {
+        const size_t save = r.pos;
+        long long start, count;
+        if (!tryReadNumber(r, start) || !tryReadNumber(r, count)) {
+            r.pos = save;
+            break;
+        }
+        r.skipWs();
+        if (r.starts("trailer")) break;
+        if (count <= 0 || count > 10000000) break;
+        for (long long i = 0; i < count; ++i) {
+            const char* p = data_.c_str() + r.pos;
+            char* endp = nullptr;
+            errno = 0;
+            const long long off = std::strtoll(p, &endp, 10);
+            if (endp == p) break;
+            r.pos += static_cast<size_t>(endp - p);
+            r.skipWs();
+            long long gen;
+            if (!tryReadNumber(r, gen)) break;
+            r.skipWs();
+            if (r.pos < data_.size() &&
+                (data_[r.pos] == 'n' || data_[r.pos] == 'f')) {
+                const bool free = (data_[r.pos] == 'f');
+                ++r.pos;
+                XrefEntry e;
+                e.id = static_cast<int>(start + i);
+                e.gen = static_cast<int>(gen);
+                e.offset = off;
+                e.free = free;
+                xref.push_back(e);
+                if (free && e.id == 0) owner = e;
+            } else {
+                break;
+            }
+            r.skipWs();
+        }
+    }
+    trailer.hasXref = !xref.empty();
+
+    // Locate the trailer dictionary.
+    const size_t trailerPos = data_.find("trailer");
+    if (trailerPos == std::string::npos) return;
+    Reader t{data_, trailerPos + 7};
+    t.skipWs();
+    if (!t.starts("<<")) return;
+    t.pos += 2;
+    while (true) {
+        t.skipWs();
+        if (t.pos >= data_.size()) return;
+        if (t.starts(">>")) break;
+        if (data_[t.pos] != '/') return;
+        ++t.pos;
+        const std::string key = readName(t);
+        t.skipWs();
+        if (key == "Size") {
+            long long v;
+            if (tryReadNumber(t, v)) trailer.size = static_cast<int>(v);
+        } else if (key == "Root") {
+            long long v;
+            if (tryReadNumber(t, v)) trailer.root = static_cast<int>(v);
+        } else if (key == "Info") {
+            long long v;
+            if (tryReadNumber(t, v)) trailer.info = static_cast<int>(v);
+        } else if (key == "Prev") {
+            long long v;
+            if (tryReadNumber(t, v)) trailer.prev = static_cast<int>(v);
+        } else {
+            skipValue(t);
+        }
+    }
 }
 
 bool PdfFile::readStream(const Object& obj, std::string& out) const {

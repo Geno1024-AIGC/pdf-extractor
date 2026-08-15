@@ -21,9 +21,27 @@ struct Object {
     std::string typeName;       // /Type if present
 };
 
+struct XrefEntry {
+    int id = 0;                 // object number
+    int gen = 0;                // generation number
+    int64_t offset = 0;         // byte offset of the object, or 0 if free
+    bool free = false;          // entry is a free-list node
+};
+
+struct TrailerInfo {
+    int size = 0;               // /Size: number of object entries (0 if absent)
+    int root = 0;               // /Root object number
+    int info = 0;               // /Info object number
+    int prev = 0;               // /Prev (xref chain) offset
+    bool hasXref = false;       // a classic xref table was found
+};
+
 class PdfFile {
 public:
     std::vector<Object> objects;
+    XrefEntry owner;            // 0 0 f, the head of the free list
+    std::vector<XrefEntry> xref;
+    TrailerInfo trailer;
     std::string error;
 
     // Load a PDF file: scan all top-level objects and classify them.
@@ -37,6 +55,7 @@ public:
     bool readStreamDecoded(const Object& obj, std::string& out) const;
 
 private:
+    void parseXrefAndTrailer();
     std::string data_;
 };
 

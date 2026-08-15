@@ -21,6 +21,16 @@ int main(int argc, char** argv) {
         return 1;
     }
     std::printf("objects: %zu\n", pdf.objects.size());
+    std::printf("trailer: hasXref=%s size=%d root=%d info=%d prev=%d\n",
+                pdf.trailer.hasXref ? "yes" : "no", pdf.trailer.size,
+                pdf.trailer.root, pdf.trailer.info, pdf.trailer.prev);
+    std::printf("xref entries: %zu\n", pdf.xref.size());
+    for (const auto& e : pdf.xref) {
+        if (e.id < 8)
+            std::printf("  xref obj %d gen %d off %lld %s\n", e.id, e.gen,
+                        static_cast<long long>(e.offset),
+                        e.free ? "free" : "live");
+    }
     for (const auto& o : pdf.objects) {
         std::printf("obj %d gen %d off %lld type %s%s",
                     o.id, o.gen, static_cast<long long>(o.offset),
