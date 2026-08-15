@@ -1,5 +1,6 @@
 #include "pagediagram.h"
 
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPen>
@@ -17,6 +18,7 @@ void PageDiagram::setBox(double w, double h, int rotate,
     rotate_ = rotate;
     sizeLabel_ = sizeLabel;
     treeMode_ = false;
+    tiles_.clear();
     update();
 }
 
@@ -26,19 +28,23 @@ void PageDiagram::setPageTree(int count, const std::vector<int>& kids,
     treeCount_ = count;
     kids_ = kids;
     sizeLabel_ = label;
-    // Reserve enough vertical space for the thumbnail grid so that pages
-    // don't overflow the widget (6 columns, 56px tiles + gap + label line).
+    // Do not cap the height here: the widget is hosted in a scroll area, so a
+    // long tree can scroll instead of being clipped.
     const int rows = (count + 5) / 6;
     const int need = rows * 56 + (rows - 1) * 8 + 34;
-    const int setH = std::min(360, std::max(90, need));
-    setMinimumHeight(setH);
-    setMaximumHeight(setH);
+    setMinimumHeight(std::max(90, need));
+    setMaximumHeight(16777215);
+    // Keep the 6-column grid fully visible horizontally once laid out.
+    setMinimumWidth(6 * 46 + 5 * 8 + 48);
+    setMaximumWidth(16777215);
+    computeTiles();
     update();
 }
 
 void PageDiagram::clearDiagram() {
     sizeLabel_.clear();
     treeMode_ = false;
+    tiles_.clear();
     update();
 }
 
@@ -51,6 +57,34 @@ void PageDiagram::paintRect(QPainter& p, const QRect& r, const QString& text) {
     f.setPixelSize(10);
     p.setFont(f);
     p.drawText(r, Qt::AlignCenter, text);
+}
+
+void PageDiagram::computeTiles() {
+    tiles_.clear();
+    if (!treeMode_) return;
+    const int cols = 6;
+    const int rows = (treeCount_ + cols - 1) / cols;
+    const int gap = 8;
+    const int tileW = 46;
+    const int tileH = 56;
+    const int gw = cols * tileW + (cols - 1) * gap;
+    const int gh = rows * tileH + (rows - 1) * gap;
+    const int gx = (width() - gw) / 2;
+    int gy = (height() - gh) / 2;
+    gy = std::max(4, gy - 6);
+    gy = std::min(gy, height() - gh - 18);
+    tiles_.resize(treeCount_);
+    for (int i = 0; i < treeCount_; ++i) {
+        const int c = i % cols;
+        const int r = i / cols;
+        tiles_[i] = QRect(gx + c * (tileW + gap), gy + r * (tileH + gap),
+                          tileW, tileH);
+    }
+}
+
+void PageDiagram::resizeEvent(QResizeEvent* event) {
+    computeTiles();
+    QWidget::resizeEvent(event);
 }
 
 void PageDiagram::paintEvent(QPaintEvent*) {
@@ -68,25 +102,13 @@ void PageDiagram::paintEvent(QPaintEvent*) {
     p.setFont(small);
     if (treeMode_) {
         // Draw a grid of thumbnail pages for a /Pages tree node.
-        const int cols = 6;
-        const int rows = (treeCount_ + cols - 1) / cols;
-        const int gap = 8;
-        const int tileW = 46;
-        const int tileH = 56;
-        const int gw = cols * tileW + (cols - 1) * gap;
-        const int gh = rows * tileH + (rows - 1) * gap;
-        const int gx = (width() - gw) / 2;
-        int gy = (height() - gh) / 2;
-        // Keep the label visible at the bottom.
-        gy = std::max(4, gy - 6);
-        gy = std::min(gy, height() - gh - 18);
+        computeTiles();
         for (int i = 0; i < treeCount_; ++i) {
-            const int c = i % cols;
-            const int r = i / cols;
-            const int kid = i < static_cast<int>(kids_.size()) ? kids_[i] : 0;
-            paintRect(p, QRect(gx + c * (tileW + gap),
-                               gy + r * (tileH + gap), tileW, tileH),
-                      kid ? QString("obj %1").arg(kid) : QString("#%1").arg(i + 1));
+            const int kid =
+                i < static_cast<int>(kids_.size()) ? kids_[i] : 0;
+            paintRect(p, tiles_[i],
+                      kid ? QString("obj %1").arg(kid)
+                          : QString("#%1").arg(i + 1));
         }
         p.setPen(QColor(0x9a, 0xa0, 0xc3));
         p.drawText(rect(), Qt::AlignHCenter | Qt::AlignBottom,
@@ -126,4 +148,21 @@ void PageDiagram::paintEvent(QPaintEvent*) {
         p.setBrush(QColor(0x4a, 0x6c, 0xf7));
         p.drawPath(path);
     }
+}
+
+void PageDiagram::mouseReleaseEvent(QMouseEvent* event) {
+    if (!treeMode_) {
+        QWidget::mouseReleaseEvent(event);
+        return;
+    }
+    const QPoint pos = event->pos();
+    for (int i = 0; i < static_cast<int>(tiles_.size()); ++i) {
+        if (tiles_[i].contains(pos)) {
+            const int kid =
+                i < static_cast<int>(kids_.size()) ? kids_[i] : 0;
+            if (kid > 0) emit pageClicked(kid);
+            break;
+        }
+    }
+    QWidget::mouseReleaseEvent(event);
 }

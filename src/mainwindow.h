@@ -61,6 +61,7 @@ private:
     QScrollArea* imageScroll_;
     QTreeWidget* structView_;
     PageDiagram* pageDiagram_;
+    QScrollArea* pageScroll_;
     QWidget* pageBox_;
     QPlainTextEdit* console_;
     QLineEdit* command_;

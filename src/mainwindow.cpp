@@ -650,10 +650,15 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     pageDiagram_ = new PageDiagram(this);
     pageDiagram_->hide();
+    pageScroll_ = new QScrollArea(this);
+    pageScroll_->setWidget(pageDiagram_);
+    pageScroll_->setWidgetResizable(false);
+    pageScroll_->setAlignment(Qt::AlignTop);
+    pageScroll_->hide();
     pageBox_ = new QWidget(this);
     auto* pageBoxLay = new QVBoxLayout(pageBox_);
     pageBoxLay->setContentsMargins(0, 0, 0, 0);
-    pageBoxLay->addWidget(pageDiagram_);
+    pageBoxLay->addWidget(pageScroll_);
 
     previewTabs_ = new QTabWidget(this);
     previewTabs_->setTabPosition(QTabWidget::South);
@@ -723,6 +728,20 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             [this](QTableWidgetItem*) { onRowChanged(); });
     connect(structView_, &QTreeWidget::itemActivated, this,
             [this](QTreeWidgetItem* it, int) { gotoRefItem(it); });
+    connect(pageDiagram_, &PageDiagram::pageClicked, this,
+            [this](int id) {
+                for (int r = 0; r < table_->rowCount(); ++r) {
+                    if (table_->item(r, 0) &&
+                        table_->item(r, 0)
+                            ->data(Qt::UserRole)
+                            .toInt() == id) {
+                        table_->setCurrentCell(r, 0);
+                        return;
+                    }
+                }
+                status_->setText("page object " + QString::number(id) +
+                                 " not found in scan");
+            });
 
     table_->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(table_, &QWidget::customContextMenuRequested, this,
@@ -961,7 +980,7 @@ void MainWindow::showObject(const Object& o) {
     // Structure tab: parse the object source into a key/value tree with
     // clickable references, plus a page diagram for /Type /Page objects.
     structView_->clear();
-    pageDiagram_->hide();
+    pageScroll_->hide();
     previewTabs_->setTabVisible(0, false);
     previewTabs_->setTabEnabled(0, false);
     if (haveSource && !src.empty()) {
@@ -1142,7 +1161,7 @@ void MainWindow::showObject(const Object& o) {
                                               .arg(o.id));
             }
             // Show the diagram in its own Page tab.
-            pageDiagram_->show();
+            pageScroll_->show();
             previewTabs_->setTabVisible(0, true);
             previewTabs_->setTabEnabled(0, true);
             previewTabs_->setCurrentIndex(0);
