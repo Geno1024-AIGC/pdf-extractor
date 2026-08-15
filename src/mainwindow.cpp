@@ -37,8 +37,8 @@ QString filterText(const Object& o) {
     return f;
 }
 
-// Modern dark theme, applied to the whole application.
-const char* kStyle = R"QSS(
+// Dark theme, applied to the whole application.
+const char* kDarkStyle = R"QSS(
 * {
     font-family: "JetBrains Mono", "Cascadia Mono", "Consolas", "Menlo",
                  "DejaVu Sans Mono", monospace;
@@ -116,6 +116,85 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 QLabel { color: #9aa0c3; }
 )QSS";
 
+// Light theme, applied when the user toggles the colour mode.
+const char* kLightStyle = R"QSS(
+* {
+    font-family: "JetBrains Mono", "Cascadia Mono", "Consolas", "Menlo",
+                 "DejaVu Sans Mono", monospace;
+    font-size: 13px;
+}
+QMainWindow, QWidget {
+    background-color: #f5f6fa;
+    color: #22242e;
+}
+QPushButton {
+    background-color: #e8eaf2;
+    border: 1px solid #c9cddd;
+    border-radius: 6px;
+    padding: 6px 14px;
+    color: #22242e;
+}
+QPushButton:hover {
+    background-color: #dde0ea;
+    border-color: #aab0c9;
+}
+QPushButton:pressed { background-color: #cfd3e0; }
+QPushButton:disabled {
+    background-color: #f0f1f6;
+    border-color: #d8dae4;
+    color: #a3a6b4;
+}
+QTableWidget {
+    background-color: #ffffff;
+    alternate-background-color: #eef0f7;
+    border: 1px solid #d0d3e0;
+    border-radius: 8px;
+    gridline-color: #d0d3e0;
+    selection-background-color: #4a6cf7;
+    selection-color: #ffffff;
+}
+QTableWidget::item:hover { background-color: #e2e5f0; }
+QHeaderView::section {
+    background-color: #e8eaf2;
+    color: #4a4e63;
+    border: none;
+    border-bottom: 2px solid #4a6cf7;
+    padding: 6px 8px;
+    font-weight: 600;
+}
+QTabWidget::pane { border: 1px solid #d0d3e0; border-radius: 8px; }
+QTabBar::tab {
+    background: transparent;
+    padding: 6px 16px;
+    color: #5a5e72;
+}
+QTabBar::tab:selected {
+    color: #22242e;
+    border-bottom: 2px solid #4a6cf7;
+}
+QPlainTextEdit {
+    background-color: #ffffff;
+    border: 1px solid #d0d3e0;
+    border-radius: 8px;
+    color: #22242e;
+    selection-background-color: #4a6cf7;
+}
+QLineEdit {
+    background-color: #ffffff;
+    border: 1px solid #c9cddd;
+    border-radius: 6px;
+    padding: 6px 10px;
+    color: #22242e;
+}
+QLineEdit:focus { border-color: #4a6cf7; }
+QScrollBar:vertical { background: transparent; width: 10px; }
+QScrollBar::handle:vertical {
+    background: #c3c7d6; border-radius: 5px; min-height: 24px;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QLabel { color: #44485c; }
+)QSS";
+
 }  // namespace
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
@@ -125,6 +204,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     openBtn_ = new QPushButton("Open PDF", this);
     extractBtn_ = new QPushButton("Extract Selected", this);
     extractBtn_->setEnabled(false);
+    themeBtn_ = new QPushButton("Light", this);
 
     table_ = new QTableWidget(this);
     table_->setColumnCount(6);
@@ -173,6 +253,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     auto* toolbar = new QHBoxLayout;
     toolbar->addWidget(openBtn_);
     toolbar->addWidget(extractBtn_);
+    toolbar->addStretch(1);
+    toolbar->addWidget(themeBtn_);
 
     auto* cmdRow = new QHBoxLayout;
     cmdRow->addWidget(new QLabel(QString::fromUtf8("\u203a"), this));
@@ -191,6 +273,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(openBtn_, &QPushButton::clicked, this, &MainWindow::openPdf);
     connect(extractBtn_, &QPushButton::clicked, this,
             &MainWindow::extractSelected);
+    connect(themeBtn_, &QPushButton::clicked, this, &MainWindow::toggleTheme);
     connect(command_, &QLineEdit::returnPressed, this, &MainWindow::runCommand);
     connect(table_, &QTableWidget::itemSelectionChanged, this,
             &MainWindow::onRowChanged);
@@ -213,11 +296,25 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 }
 
 void MainWindow::applyStyle() {
-    setStyleSheet(kStyle);
+    setStyleSheet(dark_ ? kDarkStyle : kLightStyle);
     table_->setAlternatingRowColors(true);
     table_->setShowGrid(false);
     table_->verticalHeader()->setVisible(false);
     table_->setSelectionMode(QAbstractItemView::SingleSelection);
+    preview_->setLineNumberColors(dark_ ? QColor(0x2d, 0x2f, 0x43)
+                                        : QColor(0xe8, 0xea, 0xf2),
+                                  dark_ ? QColor(0x6f, 0x72, 0x8f)
+                                        : QColor(0x5a, 0x5e, 0x72));
+    info_->setLineNumberColors(dark_ ? QColor(0x2d, 0x2f, 0x43)
+                                     : QColor(0xe8, 0xea, 0xf2),
+                               dark_ ? QColor(0x6f, 0x72, 0x8f)
+                                     : QColor(0x5a, 0x5e, 0x72));
+}
+
+void MainWindow::toggleTheme() {
+    dark_ = !dark_;
+    themeBtn_->setText(dark_ ? "Light" : "Dark");
+    applyStyle();
 }
 
 void MainWindow::openPath(const QString& path) {
@@ -332,9 +429,15 @@ void MainWindow::showObject(const Object& o) {
     contextObjId_ = o.id;
     if (!o.isStream) {
         previewStack_->setCurrentWidget(preview_);
-        preview_->setPlainText(
-            "object " + QString::number(o.id) + " is not a stream (type " +
-            QString::fromStdString(o.type) + ")");
+        std::string src;
+        if (pdf_.readObjectSource(o, src)) {
+            preview_->setPlainText(QString::fromStdString(src));
+        } else {
+            preview_->setPlainText(
+                "object " + QString::number(o.id) +
+                " is not a stream (type " + QString::fromStdString(o.type) +
+                "); no source text found");
+        }
         return;
     }
 

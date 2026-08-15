@@ -66,6 +66,11 @@ public:
     // Decoded stream bytes (filters applied, from outermost to innermost).
     bool readStreamDecoded(const Object& obj, std::string& out) const;
 
+    // Raw source text of an object from its "N G obj" line up to "endobj"
+    // (for streams, up to the closing "endstream\nendobj"). Suitable for
+    // showing dict / array object contents in the preview.
+    bool readObjectSource(const Object& obj, std::string& out) const;
+
 private:
     void parseXrefAndTrailer();
     std::string data_;

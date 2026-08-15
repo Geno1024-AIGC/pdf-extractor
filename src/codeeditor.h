@@ -1,6 +1,7 @@
 #ifndef CODEEDITOR_H
 #define CODEEDITOR_H
 
+#include <QColor>
 #include <QPlainTextEdit>
 
 class QPaintEvent;
@@ -18,12 +19,17 @@ public:
     void lineNumberAreaPaintEvent(QPaintEvent* event);
     int lineNumberAreaWidth() const;
 
+    // Adjust the line-number gutter colours for dark/light themes.
+    void setLineNumberColors(const QColor& background, const QColor& text);
+
 protected:
     void resizeEvent(QResizeEvent* event) override;
 
 private:
     void updateLineNumberAreaWidth();
     QWidget* lineNumberArea_;
+    QColor gutterBackground_ = QColor(0x2d, 0x2f, 0x43);
+    QColor gutterText_ = QColor(0x6f, 0x72, 0x8f);
 };
 
 #endif  // CODEEDITOR_H

@@ -72,30 +72,35 @@ void CodeEditor::resizeEvent(QResizeEvent* event) {
               contents.height()));
 }
 
+void CodeEditor::setLineNumberColors(const QColor& background,
+                                     const QColor& text) {
+    gutterBackground_ = background;
+    gutterText_ = text;
+    lineNumberArea_->update();
+}
+
 void CodeEditor::lineNumberAreaPaintEvent(QPaintEvent* event) {
     QPainter painter(lineNumberArea_);
-    painter.fillRect(event->rect(), QColor(0x2d, 0x2f, 0x43));
+    painter.fillRect(event->rect(), gutterBackground_);
 
     QTextBlock block = firstVisibleBlock();
     int blockNumber = block.blockNumber();
-    const int top = static_cast<int>(
+    int top = static_cast<int>(
         blockBoundingGeometry(block).translated(contentOffset()).top());
-    const int bottom = top + static_cast<int>(blockBoundingRect(block).height());
+    int bottom = top + static_cast<int>(blockBoundingRect(block).height());
 
     while (block.isValid() && top <= event->rect().bottom()) {
         if (block.isVisible() && bottom >= event->rect().top()) {
-            painter.setPen(QColor(0x6f, 0x72, 0x8f));
+            painter.setPen(gutterText_);
             painter.drawText(0, top, lineNumberArea_->width() -
                                           fontMetrics().horizontalAdvance('9'),
                              fontMetrics().height(), Qt::AlignRight,
                              QString::number(blockNumber + 1));
         }
         block = block.next();
-        if (block.isValid()) {
-            const int ntop = static_cast<int>(
-                blockBoundingGeometry(block).translated(contentOffset()).top());
-            if (ntop > event->rect().bottom()) break;
-        }
-        blockNumber = block.blockNumber();
+        if (!block.isValid()) break;
+        top = bottom;
+        bottom = top + static_cast<int>(blockBoundingRect(block).height());
+        ++blockNumber;
     }
 }

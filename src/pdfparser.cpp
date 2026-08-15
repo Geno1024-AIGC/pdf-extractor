@@ -543,6 +543,34 @@ bool PdfFile::readStreamDecoded(const Object& obj, std::string& out) const {
     return true;
 }
 
+bool PdfFile::readObjectSource(const Object& obj, std::string& out) const {
+    if (obj.offset < 0) return false;
+    const size_t start = static_cast<size_t>(obj.offset);
+    if (start >= data_.size()) return false;
+    if (obj.isStream && obj.streamStart >= 0 && obj.rawLength >= 0) {
+        // Between encoded stream bytes and the closing "endstream": skip the
+        // stream data and resume right after "endstream\n".
+        size_t p = static_cast<size_t>(obj.streamStart) +
+                   static_cast<size_t>(obj.rawLength);
+        const std::string mark = "\nendstream";
+        const size_t hit = data_.find(mark, p);
+        if (hit == std::string::npos) return false;
+        p = hit + mark.size();
+        // trim whitespace after endstream
+        while (p < data_.size() && (data_[p] == '\r' || data_[p] == '\n'))
+            ++p;
+        const size_t end = data_.find("endobj", p);
+        if (end == std::string::npos) return false;
+        out = data_.substr(start, end - start);
+        return true;
+    }
+    const std::string mark = "endobj";
+    const size_t end = data_.find(mark, start);
+    if (end == std::string::npos) return false;
+    out = data_.substr(start, end - start);
+    return true;
+}
+
 bool applyPredictor(const Object& obj, const std::string& in,
                     std::vector<unsigned char>& out) {
     if (obj.predictor <= 1) {

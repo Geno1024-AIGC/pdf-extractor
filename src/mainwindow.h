@@ -36,6 +36,7 @@ private slots:
     void saveContextObject();
     void savePreviewText();
     void saveDisplayedImage();
+    void toggleTheme();
 
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override;
@@ -49,6 +50,7 @@ private:
     void updateImageLabel();
     QPushButton* openBtn_;
     QPushButton* extractBtn_;
+    QPushButton* themeBtn_;
     QTableWidget* table_;
     CodeEditor* preview_;
     CodeEditor* info_;
@@ -62,6 +64,7 @@ private:
     QString outDir_;
     int contextObjId_ = -1;
     QPixmap imagePixmap_;
+    bool dark_ = true;
 };
 
 }  // namespace pdfx
