@@ -968,6 +968,24 @@ void MainWindow::openPath(const QString& path) {
     setWindowTitle("PDF Extractor - " + QFileInfo(path).fileName());
     fillTable();
     fillInfo();
+    // Drop the previous file's inspector state so a fresh load starts clean.
+    table_->clearSelection();
+    table_->setCurrentCell(-1, -1);
+    structView_->clear();
+    pageDiagram_->clearDiagram();
+    pageScroll_->hide();
+    previewTabs_->setTabVisible(0, false);
+    previewTabs_->setTabEnabled(0, false);
+    preview_->clear();
+    hexView_->clear();
+    contentView_->clear();
+    previewTabs_->setTabVisible(4, false);
+    previewTabs_->setTabEnabled(4, false);
+    previewTabs_->setTabVisible(5, false);
+    previewTabs_->setTabEnabled(5, false);
+    imagePixmap_ = QPixmap();
+    updateImageLabel();
+    previewTabs_->setCurrentIndex(1);
     int nStream = 0;
     for (const auto& o : pdf_.objects)
         if (o.isStream) ++nStream;
