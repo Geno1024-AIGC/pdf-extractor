@@ -33,6 +33,85 @@ QString filterText(const Object& o) {
     }
     return f;
 }
+
+// Modern dark theme, applied to the whole application.
+const char* kStyle = R"QSS(
+* {
+    font-family: "Inter", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 13px;
+}
+QMainWindow, QWidget {
+    background-color: #1e1f29;
+    color: #e8e9f0;
+}
+QPushButton {
+    background-color: #2d2f43;
+    border: 1px solid #3a3d55;
+    border-radius: 6px;
+    padding: 6px 14px;
+    color: #e8e9f0;
+}
+QPushButton:hover {
+    background-color: #3a3d55;
+    border-color: #565a7d;
+}
+QPushButton:pressed { background-color: #23243a; }
+QPushButton:disabled {
+    background-color: #27283652;
+    border-color: #30314a;
+    color: #6f7180;
+}
+QTableWidget {
+    background-color: #23243a;
+    alternate-background-color: #292a44;
+    border: 1px solid #2f3150;
+    border-radius: 8px;
+    gridline-color: #2f3150;
+    selection-background-color: #4a6cf7;
+    selection-color: #ffffff;
+}
+QTableWidget::item:hover { background-color: #3a3d55; }
+QHeaderView::section {
+    background-color: #2d2f43;
+    color: #b9bce0;
+    border: none;
+    border-bottom: 2px solid #4a6cf7;
+    padding: 6px 8px;
+    font-weight: 600;
+}
+QTabWidget::pane { border: 1px solid #2f3150; border-radius: 8px; }
+QTabBar::tab {
+    background: transparent;
+    padding: 6px 16px;
+    color: #9aa0c3;
+}
+QTabBar::tab:selected {
+    color: #ffffff;
+    border-bottom: 2px solid #4a6cf7;
+}
+QPlainTextEdit {
+    background-color: #16171f;
+    border: 1px solid #2f3150;
+    border-radius: 8px;
+    color: #d7d9e6;
+    selection-background-color: #4a6cf7;
+}
+QLineEdit {
+    background-color: #16171f;
+    border: 1px solid #2f3150;
+    border-radius: 6px;
+    padding: 6px 10px;
+    color: #e8e9f0;
+}
+QLineEdit:focus { border-color: #4a6cf7; }
+QScrollBar:vertical { background: transparent; width: 10px; }
+QScrollBar::handle:vertical {
+    background: #3a3d55; border-radius: 5px; min-height: 24px;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QLabel { color: #9aa0c3; }
+)QSS";
+
 }  // namespace
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
@@ -115,7 +194,16 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             &MainWindow::onRowChanged);
     connect(table_, &QTableWidget::itemActivated,
             [this](QTableWidgetItem*) { onRowChanged(); });
+    applyStyle();
     resize(1100, 640);
+}
+
+void MainWindow::applyStyle() {
+    setStyleSheet(kStyle);
+    table_->setAlternatingRowColors(true);
+    table_->setShowGrid(false);
+    table_->verticalHeader()->setVisible(false);
+    table_->setSelectionMode(QAbstractItemView::SingleSelection);
 }
 
 void MainWindow::openPath(const QString& path) {
@@ -127,9 +215,15 @@ void MainWindow::openPath(const QString& path) {
     setWindowTitle("PDF Extractor - " + QFileInfo(path).fileName());
     fillTable();
     fillInfo();
+    int nStream = 0;
+    for (const auto& o : pdf_.objects)
+        if (o.isStream) ++nStream;
     log("opened " + path + " (" + QString::number(pdf_.objects.size()) +
-        " objects)");
-    status_->setText("opened " + QFileInfo(path).fileName());
+        " objects, " + QString::number(nStream) + " streams)");
+    status_->setText(QString("opened %1  ·  %2 objects  ·  %3 streams")
+                         .arg(QFileInfo(path).fileName())
+                         .arg(pdf_.objects.size())
+                         .arg(nStream));
     extractBtn_->setEnabled(true);
 }
 

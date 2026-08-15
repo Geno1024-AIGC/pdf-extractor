@@ -29,6 +29,7 @@ private slots:
     void onRowChanged();
 
 private:
+    void applyStyle();
     void fillTable();
     void showObject(const Object& o);
     void fillInfo();
