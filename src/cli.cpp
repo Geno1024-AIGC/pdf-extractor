@@ -231,9 +231,11 @@ int runCli(const std::vector<std::string>& args) {
         execCommand(&pdf, spec, outCb);
         return 0;
     }
+    // No arguments (or explicit "gui") -> launch the GUI.
+    if (args.empty() || args[0] == "gui") return -1;
+
     // bare ".pdf" argument (not a subcommand) -> open it in the GUI
-    if (!args.empty() && args[0] != "list" && args[0] != "extract" &&
-        args[0] != "gui" &&
+    if (args[0] != "list" && args[0] != "extract" && args[0] != "info" &&
         (args[0].size() > 4 && args[0].rfind(".pdf") != std::string::npos)) {
         return -1;
     }
