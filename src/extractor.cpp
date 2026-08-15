@@ -86,7 +86,9 @@ std::vector<std::string> extractAllStreams(const PdfFile& pdf,
 
 std::string makePreview(const std::string& decoded, size_t maxBytes,
                         bool withLineNumbers) {
-    // Decide text vs binary by sampling the printable ratio.
+    // Decide text vs binary by sampling the printable ratio. Bytes >= 0x80
+    // count as printable too (UTF-8 text); only control characters and the
+    // high-bit runs that aren't valid UTF-8 pull a stream toward binary.
     bool binary = true;
     size_t printable = 0;
     size_t sample = 0;
@@ -96,21 +98,18 @@ std::string makePreview(const std::string& decoded, size_t maxBytes,
             printable++;
         } else if (c >= 32 && c < 127) {
             printable++;
+        } else if (c >= 0x80) {
+            printable++;  // assume UTF-8 continuation / non-ASCII text
         }
         sample++;
     }
-    if (sample > 0 && printable * 10 >= sample * 9) binary = false;
+    if (sample > 0 && printable * 10 >= sample * 8) binary = false;
 
     if (binary) {
-        // hexdump-style short view
+        // hexdump-style short view (no offset prefix, matching the Hex tab)
         std::string out;
         size_t shown = 0;
         for (unsigned char c : decoded) {
-            if (shown == 0) {
-                char line[16];
-                std::snprintf(line, sizeof(line), "%04zx: ", shown);
-                out += line;
-            }
             char h[4];
             std::snprintf(h, sizeof(h), "%02x ", c);
             out += h;
