@@ -21,6 +21,10 @@ add_executable(pdfx
     src/main.cpp
     src/pdfparser.cpp
     src/pdfparser.h
+    src/cli.cpp
+    src/cli.h
+    src/extractor.cpp
+    src/extractor.h
     src/filters.cpp
     src/filters.h
     src/mainwindow.cpp
