@@ -29,6 +29,8 @@ add_executable(pdfx
     src/filters.h
     src/mainwindow.cpp
     src/mainwindow.h
+    src/codeeditor.cpp
+    src/codeeditor.h
 )
 
 target_include_directories(pdfx PRIVATE src)

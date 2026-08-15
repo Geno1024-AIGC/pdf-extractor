@@ -24,7 +24,10 @@ std::string extractStream(const PdfFile& pdf, const class Object& obj,
                           const std::string& outdir);
 
 // Convert decoded bytes to a human-readable preview (up to `maxBytes`).
-std::string makePreview(const std::string& decoded, size_t maxBytes = 4096);
+// When `withLineNumbers` is true each text line is prefixed with a right-
+// aligned line number (used by the CLI); editors render their own gutter.
+std::string makePreview(const std::string& decoded, size_t maxBytes = 4096,
+                        bool withLineNumbers = true);
 
 }  // namespace pdfx
 

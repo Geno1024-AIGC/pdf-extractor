@@ -4,10 +4,11 @@
 #include <QMainWindow>
 #include <QString>
 
+#include "codeeditor.h"
 #include "pdfparser.h"
 
 class QTableWidget;
-class QPlainTextEdit;
+class QLineEdit;
 class QLineEdit;
 class QLabel;
 class QPushButton;
@@ -37,8 +38,8 @@ private:
     QPushButton* openBtn_;
     QPushButton* extractBtn_;
     QTableWidget* table_;
-    QPlainTextEdit* preview_;
-    QPlainTextEdit* info_;
+    CodeEditor* preview_;
+    CodeEditor* info_;
     QStackedWidget* previewStack_;
     QLabel* imageLabel_;
     QPlainTextEdit* console_;

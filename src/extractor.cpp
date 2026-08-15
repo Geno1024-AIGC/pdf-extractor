@@ -84,7 +84,8 @@ std::vector<std::string> extractAllStreams(const PdfFile& pdf,
     return written;
 }
 
-std::string makePreview(const std::string& decoded, size_t maxBytes) {
+std::string makePreview(const std::string& decoded, size_t maxBytes,
+                        bool withLineNumbers) {
     // Decide text vs binary by sampling the printable ratio.
     bool binary = true;
     size_t printable = 0;
@@ -120,15 +121,18 @@ std::string makePreview(const std::string& decoded, size_t maxBytes) {
         return out;
     }
 
-    // Text: keep newlines, emit a line number prefix per line.
+    // Text: keep newlines, optionally emit a line number prefix per line.
     std::string out;
     std::string line;
     size_t lineNo = 1;
     size_t shown = 0;
     auto flushLine = [&]() {
-        char num[16];
-        std::snprintf(num, sizeof(num), "%7zu| ", lineNo++);
-        out += num;
+        if (withLineNumbers) {
+            char num[16];
+            std::snprintf(num, sizeof(num), "%7zu| ", lineNo);
+            out += num;
+        }
+        ++lineNo;
         out += line;
         if (!out.empty() && out.back() != '\n') out += "\n";
         line.clear();

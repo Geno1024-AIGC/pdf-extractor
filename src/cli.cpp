@@ -47,7 +47,8 @@ bool tryParseInt(const std::string& s, int& v) {
 }  // namespace
 
 int execCommand(PdfFile* pdf, const std::string& cmd,
-                const std::function<void(const std::string&)>& emit) {
+                const std::function<void(const std::string&)>& emit,
+                bool lineNumbers) {
     const std::vector<std::string> args = tokenize(cmd);
     if (args.empty()) return 0;
 
@@ -121,7 +122,7 @@ int execCommand(PdfFile* pdf, const std::string& cmd,
                 if (o.id != id) continue;
                 std::string decoded;
                 if (o.isStream && pdf->readStreamDecoded(o, decoded)) {
-                    emit(makePreview(decoded, 4096));
+                    emit(makePreview(decoded, 4096, lineNumbers));
                 } else if (o.isStream) {
                     emit("object " + std::to_string(id) +
                          " is a stream but could not be decoded");

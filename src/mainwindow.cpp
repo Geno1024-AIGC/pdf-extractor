@@ -37,7 +37,8 @@ QString filterText(const Object& o) {
 // Modern dark theme, applied to the whole application.
 const char* kStyle = R"QSS(
 * {
-    font-family: "Inter", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-family: "JetBrains Mono", "Cascadia Mono", "Consolas", "Menlo",
+                 "DejaVu Sans Mono", monospace;
     font-size: 13px;
 }
 QMainWindow, QWidget {
@@ -131,8 +132,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     table_->setSelectionMode(QAbstractItemView::SingleSelection);
     table_->horizontalHeader()->setStretchLastSection(true);
 
-    preview_ = new QPlainTextEdit(this);
-    preview_->setReadOnly(true);
+    preview_ = new CodeEditor(this);
 
     imageLabel_ = new QLabel(this);
     imageLabel_->setAlignment(Qt::AlignCenter);
@@ -145,8 +145,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     previewStack_->addWidget(preview_);
     previewStack_->addWidget(imageScroll);
 
-    info_ = new QPlainTextEdit(this);
-    info_->setReadOnly(true);
+    info_ = new CodeEditor(this);
 
     command_ = new QLineEdit(this);
     command_->setPlaceholderText(
@@ -395,18 +394,19 @@ void MainWindow::showObject(const Object& o) {
                 " bits=" + QString::number(o.bitsPerComponent) +
                 " colorspace=" + QString::fromStdString(o.colorspace) +
                 " predictor=" + QString::number(o.predictor) +
-                "]\n" + QString::fromStdString(makePreview(decoded)));
+                "]\n" + QString::fromStdString(makePreview(decoded, 4096, false)));
             return;
         }
         previewStack_->setCurrentWidget(preview_);
-        preview_->setPlainText(QString::fromStdString(makePreview(decoded)));
+        preview_->setPlainText(
+            QString::fromStdString(makePreview(decoded, 4096, false)));
     } else {
         std::string raw;
         if (pdf_.readStream(o, raw)) {
             previewStack_->setCurrentWidget(preview_);
             preview_->setPlainText(
                 "[decode failed, showing raw bytes]\n" +
-                QString::fromStdString(makePreview(raw)));
+                QString::fromStdString(makePreview(raw, 4096, false)));
         } else {
             previewStack_->setCurrentWidget(preview_);
             preview_->setPlainText("could not read stream data");
@@ -430,7 +430,7 @@ void MainWindow::runCommand() {
             console_->appendPlainText(QString::fromStdString(s));
         }
         status_->setText(QString::fromStdString(s));
-    });
+    }, false);
 
     if (lower.startsWith("open ") && !pdf_.objects.empty()) fillTable();
     if (rc == 2) close();
