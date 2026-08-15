@@ -1,82 +1,89 @@
 #!/usr/bin/env python3
-"""Generate a small test PDF exercising the pdf-extractor parser:
-   - an uncompressed dict
-   - a FlateDecode over a small original embedded stream is simulated:
-     we embed a fake image data stream that zlib.decompress will reject,
-     and a plain-text /Length-bearing stream for validation.
-   The goal is to produce objects the tool can list and extract.
+"""Generate a richer test PDF for pdf-extractor:
+   - a FlateDecode text stream (extract -> txt)
+   - an ASCII85Decode stream (extract -> txt)
+   - an uncompressed font stream (no filter)
+   - a DCTDecode "image" stream (fake JPEG header so extension -> jpg)
+   - an indirect /Length stream
 """
-import zlib
+import base64
 import sys
+import zlib
 
-def make_flate(data: bytes) -> bytes:
-    return zlib.compress(data)
 
-orig = b"hello pdf-extractor\nsecond line of content\n"
-flate = make_flate(orig)
+def a85(data: bytes) -> bytes:
+    # Adobe ASCII85: '<~' + encoded + '~>' ; a85encode already handles the
+    # final partial group, so no padding to a multiple of 5 is added.
+    return b"<~" + base64.a85encode(data, adobe=False) + b"~>"
 
-length_direct = len(flate)
 
-objs = []
+parts = []
+parts.append(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n")
+parts.append(b"2 0 obj\n<< /Type /Pages /Count 0 >>\nendobj\n")
 
-# object 1: simple dict
-objs.append(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n")
-
-# object 2: dict with kids empty
-objs.append(b"2 0 obj\n<< /Type /Pages /Count 0 >>\nendobj\n")
-
-# object 3: a stream with direct Length + FlateDecode
-objs.append(
-    b"3 0 obj\n"
-    b"<< /Length %d /Filter /FlateDecode >>\nstream\n" % length_direct
-    + flate
+# 3: FlateDecode text
+text1 = b"hello pdf-extractor\nflate text stream line two\n"
+parts.append(
+    b"3 0 obj\n<< /Length %d /Filter /FlateDecode >>\nstream\n"
+    % len(zlib.compress(text1))
+    + zlib.compress(text1)
     + b"\nendstream\nendobj\n"
 )
 
-# object 4: a number used as an indirect Length target (= length of flate5)
-# object 5: stream whose /Length is an indirect reference -> 4 0 R
-flate5 = make_flate(b"indirect length works")
-len_bytes = ("%d" % len(flate5)).encode()
-objs.append(b"4 0 obj\n" + len_bytes + b"\nendobj\n")
-objs.append(
-    b"5 0 obj\n"
-    b"<< /Length 4 0 R /Filter /FlateDecode >>\nstream\n" % ()
-    + flate5
+# 4: ASCII85 text
+text2 = b"ascii85 encoded content, some more text here\n"
+parts.append(
+    b"4 0 obj\n<< /Length %d /Filter /ASCII85Decode >>\nstream\n"
+    % len(a85(text2))
+    + a85(text2)
     + b"\nendstream\nendobj\n"
 )
 
-# object 6: font stream (uncompressed), no filter
-font = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-objs.append(
-    b"6 0 obj\n"
-    b"<< /Type /Font /Subtype /Type1 /Length %d >>\nstream\n" % len(font)
+# 5: font stream (uncompressed)
+font = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+parts.append(
+    b"5 0 obj\n<< /Type /Font /Subtype /Type1 /Length %d >>\nstream\n" % len(font)
     + font
     + b"\nendstream\nendobj\n"
 )
 
-body = b"".join(objs)
+# 6: fake JPEG "image" (DCTDecode); content is not a real JPEG but the header
+# signature makes guessExtension() return .jpg
+jpg = b"\xff\xd8\xff\xe0" + b"\x00" * 40 + b"\xff\xd9"
+parts.append(
+    b"6 0 obj\n<< /Type /XObject /Subtype /Image /Width 4 /Height 4 "
+    b"/ColorSpace /DeviceRGB /Filter /DCTDecode /Length %d >>\nstream\n" % len(jpg)
+    + jpg
+    + b"\nendstream\nendobj\n"
+)
 
-xref_offset = len(b"%PDF-1.4\n") + len(body) + 0
-pdf = b"%PDF-1.4\n" + body
+# 7: indirect length target, 8: FlateDecode stream with indirect /Length
+text3 = b"indirect length is resolved correctly\n"
+flate3 = zlib.compress(text3)
+parts.append(b"7 0 obj\n%d\nendobj\n" % len(flate3))
+parts.append(
+    b"8 0 obj\n<< /Length 7 0 R /Filter /FlateDecode >>\nstream\n"
+    + flate3
+    + b"\nendstream\nendobj\n"
+)
 
-# compute offsets
+body = b"".join(parts)
+header = b"%PDF-1.4\n"
 offsets = {}
-header_len = len(b"%PDF-1.4\n")
-pos = header_len
-for i, obj in enumerate(objs, start=1):
+pos = len(header)
+for i, p in enumerate(parts, start=1):
     offsets[i] = pos
-    pos += len(obj)
-xref_offset = pos
+    pos += len(p)
 
-pdf += b"xref\n"
-pdf += b"0 %d\n" % (len(objs) + 1)
+pdf = header + body
+pdf += b"xref\n0 %d\n" % (len(parts) + 1)
 pdf += b"0000000000 65535 f \n"
-for i in range(1, len(objs) + 1):
+for i in range(1, len(parts) + 1):
     pdf += b"%010d 00000 n \n" % offsets[i]
-pdf += b"trailer\n<< /Size %d /Root 1 0 R >>\n" % (len(objs) + 1)
-pdf += b"startxref\n%d\n%%%%EOF\n" % xref_offset
+pdf += b"trailer\n<< /Size %d /Root 1 0 R >>\n" % (len(parts) + 1)
+pdf += b"startxref\n%d\n%%%%EOF\n" % pos
 
-out = sys.argv[1] if len(sys.argv) > 1 else "test.pdf"
+out = sys.argv[1] if len(sys.argv) > 1 else "rich.pdf"
 with open(out, "wb") as f:
     f.write(pdf)
 print("wrote", out, len(pdf), "bytes")

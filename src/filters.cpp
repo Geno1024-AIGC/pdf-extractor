@@ -61,6 +61,10 @@ bool asciiHexDecode(const char* src, size_t srcLen, std::string& out) {
 // ASCII85Decode (Adobe variant): 5 chars -> 4 bytes, 'z' -> 0000, ~> terminator.
 bool ascii85Decode(const char* src, size_t srcLen, std::string& out) {
     out.clear();
+    if (srcLen >= 2 && src[0] == '<' && src[1] == '~') {
+        src += 2;  // optional Adobe "<~" marker
+        srcLen -= 2;
+    }
     unsigned group = 0;
     int count = 0;
     for (size_t i = 0; i < srcLen; ++i) {
@@ -123,6 +127,12 @@ bool decodeFilter(const std::string& name,
     if (name == "ASCIIHexDecode" || name == "AHx") return asciiHexDecode(src, srcLen, out);
     if (name == "ASCII85Decode" || name == "A85") return ascii85Decode(src, srcLen, out);
     if (name == "RunLengthDecode" || name == "RL") return runLengthDecode(src, srcLen, out);
+    // Passthrough filters keep the bytes unchanged (JPEG/JPX/… data).
+    if (name == "DCTDecode" || name == "JPXDecode" || name == "JBIG2Decode" ||
+        name == "CCITTFaxDecode") {
+        out.assign(src, srcLen);
+        return true;
+    }
     return false;  // unknown / unsupported filter
 }
 

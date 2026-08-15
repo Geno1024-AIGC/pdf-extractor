@@ -57,10 +57,12 @@ std::string extractStream(const PdfFile& pdf, const Object& obj,
         std::filesystem::create_directories(dir);
 
     std::string decoded;
-    const bool ok = pdf.readStreamDecoded(obj, decoded);
-    if (!ok && !pdf.readStream(obj, decoded)) return {};
+    bool decoded_ok = pdf.readStreamDecoded(obj, decoded);
+    if (!decoded_ok && !pdf.readStream(obj, decoded)) return {};
 
-    const std::string ext = ok ? guessExtension(obj, decoded) : "raw";
+    const std::string ext =
+        decoded_ok ? guessExtension(obj, decoded)
+                   : (obj.subtype == "Image" ? "bin" : "raw");
     std::filesystem::path file =
         dir / ("obj_" + std::to_string(obj.id) + "." + ext);
 
