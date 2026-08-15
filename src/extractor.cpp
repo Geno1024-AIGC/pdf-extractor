@@ -85,24 +85,24 @@ std::vector<std::string> extractAllStreams(const PdfFile& pdf,
 }
 
 std::string makePreview(const std::string& decoded, size_t maxBytes) {
-    std::string out;
-    out.reserve(maxBytes + 8);
-    size_t n = 0;
-    bool binary = false;
+    // Decide text vs binary by sampling the printable ratio.
+    bool binary = true;
+    size_t printable = 0;
+    size_t sample = 0;
     for (unsigned char c : decoded) {
-        if (c == '\n' || c == '\r' || c == '\t' || c == 0x0b || c == 0x0c)
-            continue;  // compress whitespace for preview
-        if (c < 32 || c == 127) {
-            binary = true;
-            break;
+        if (sample == 256) break;
+        if (c == '\n' || c == '\r' || c == '\t') {
+            printable++;
+        } else if (c >= 32 && c < 127) {
+            printable++;
         }
-        ++n;
-        if (n > maxBytes) break;
-        out.push_back(static_cast<char>(c));
+        sample++;
     }
+    if (sample > 0 && printable * 10 >= sample * 9) binary = false;
+
     if (binary) {
         // hexdump-style short view
-        out.clear();
+        std::string out;
         size_t shown = 0;
         for (unsigned char c : decoded) {
             if (shown == 0) {
@@ -117,7 +117,43 @@ std::string makePreview(const std::string& decoded, size_t maxBytes) {
             if (shown >= maxBytes) { out += "...\n"; break; }
         }
         out += "\n[binary data]";
+        return out;
     }
+
+    // Text: keep newlines, emit a line number prefix per line.
+    std::string out;
+    std::string line;
+    size_t lineNo = 1;
+    size_t shown = 0;
+    auto flushLine = [&]() {
+        char num[16];
+        std::snprintf(num, sizeof(num), "%7zu| ", lineNo++);
+        out += num;
+        out += line;
+        if (!out.empty() && out.back() != '\n') out += "\n";
+        line.clear();
+    };
+    for (unsigned char c : decoded) {
+        if (c == '\r') continue;  // normalize CRLF
+        if (c == '\n') {
+            flushLine();
+            continue;
+        }
+        if (c == '\t') c = ' ';
+        if (c < 32 || c == 127) {  // stray control char -> treat as binary-ish
+            flushLine();
+            out += "[...binary shown as hex...]";
+            return out;
+        }
+        if (++shown > maxBytes) {
+            line += "…";
+            flushLine();
+            out += "[truncated]";
+            return out;
+        }
+        line.push_back(static_cast<char>(c));
+    }
+    if (!line.empty()) flushLine();
     return out;
 }
 
