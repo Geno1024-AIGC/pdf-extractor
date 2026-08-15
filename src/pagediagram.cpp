@@ -170,11 +170,16 @@ void PageDiagram::paintEvent(QPaintEvent*) {
         const int sh = static_cast<int>((b.y1 - b.y0) * scale);
         if (sw <= 0 || sh <= 0) continue;
         boxRects_.push_back(QRect(sx, sy, sw, sh));
+        // Inset a full-page box so its outline does not hide under the page
+        // border and the "frame" stays visible.
+        const int inset =
+            (sw >= pw - 2 && sh >= ph - 2) ? 3 : 0;
+        QRect r(sx + inset, sy + inset, sw - 2 * inset, sh - 2 * inset);
         p.setPen(QPen(QColor(0x4a, 0x6c, 0xf7), 1));
         p.setBrush(QColor(0x4a, 0x6c, 0xf7, 70));
-        p.drawRect(sx, sy, sw, sh);
-        QRect lr(sx, sy - 14, sw, 14);
-        if (lr.top() < py + 2) lr.moveTop(sy);
+        p.drawRect(r);
+        QRect lr(r.x(), r.y() - 14, r.width(), 14);
+        if (lr.top() < py + 2) lr.moveTop(r.y());
         p.setPen(b.objId > 0
                      ? QColor(0x7c, 0x9c, 0xff)
                      : QColor(0x9a, 0xa0, 0xc3));
