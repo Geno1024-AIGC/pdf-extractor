@@ -18,6 +18,7 @@ Qt5 + zlib dev tree when system dev packages are unavailable (sets `-DMY_SDK`).
 
 ```sh
 build/pdfx list <file.pdf>                 # list all parsed objects
+build/pdfx info <file.pdf>                 # show xref table / trailer info
 build/pdfx extract <file.pdf>              # extract every stream into CWD
 build/pdfx extract <file.pdf> 3 5          # extract objects 3 and 5 only
 ```
@@ -35,11 +36,16 @@ build/pdfx <file.pdf>     # open the GUI with a file
 
 - **Open PDF** loads a file; the object table lists every parsed object (id,
   type, subtype, filter, raw size, offset).
-- Select a row to see the decoded stream (or hexdump for binary data) in the
-  **Preview** tab.
+- Select a row to see the decoded stream in the **Preview** tab: text streams
+  render with line numbers, image streams (JPEG/PNG from DCTDecode/FlateDecode)
+  are rendered as pictures, and other binary data is shown as a hexdump.
+- The **Info** tab shows file structure: the classic xref table, the trailer
+  dictionary (`/Size`, `/Root`, `/Info`, `/Prev`) and how many scanned objects
+  are confirmed by the xref.
 - **Extract Selected** writes the selected stream to a chosen directory.
 - The **command line** at the bottom runs the same commands as the CLI
-  (`list`, `preview <n>`, `extract <n>`, `extractall`, `out <dir>`, `open <f>`).
+  (`list`, `info`, `preview <n>`, `extract <n>`, `extractall`, `out <dir>`,
+  `open <f>`).
 
 ## Supported filters
 
