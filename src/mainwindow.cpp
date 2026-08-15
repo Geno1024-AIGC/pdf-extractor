@@ -588,28 +588,24 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     structView_ = new QTreeWidget(this);
     structView_->setHeaderLabels({"Key", "Value"});
+
     pageDiagram_ = new PageDiagram(this);
-    pageDiagram_->setMinimumHeight(90);
-    pageDiagram_->setMaximumHeight(360);
     pageDiagram_->hide();
-    auto* structBox = new QWidget(this);
-    auto* structLay = new QVBoxLayout(structBox);
-    structLay->setContentsMargins(0, 0, 0, 0);
-    structLay->addWidget(pageDiagram_);
-    structLay->addWidget(structView_);
+    pageBox_ = new QWidget(this);
+    auto* pageBoxLay = new QVBoxLayout(pageBox_);
+    pageBoxLay->setContentsMargins(0, 0, 0, 0);
+    pageBoxLay->addWidget(pageDiagram_);
 
     previewTabs_ = new QTabWidget(this);
     previewTabs_->setTabPosition(QTabWidget::South);
-    previewTabs_->addTab(structBox, "Structure");
+    previewTabs_->addTab(structView_, "Structure");
     previewTabs_->addTab(preview_, "Text");
     previewTabs_->addTab(hexView_, "Hex");
+    previewTabs_->addTab(pageBox_, "Page");
     previewTabs_->addTab(imageScroll_, "Image");
-    previewTabs_->setTabEnabled(0, false);
-    previewTabs_->setTabEnabled(1, true);
-    previewTabs_->setTabEnabled(2, true);
-    previewTabs_->setTabEnabled(3, false);
     previewTabs_->setTabVisible(3, false);
-    previewTabs_->setCurrentIndex(1);
+    previewTabs_->setTabEnabled(3, false);
+    previewTabs_->setCurrentIndex(0);
 
     info_ = new CodeEditor(this);
 
@@ -864,8 +860,8 @@ void MainWindow::showObject(const Object& o) {
 
     // Text tab: decoded stream (text streams) or raw object source (others).
     preview_->clear();
-    previewTabs_->setTabEnabled(3, false);
-    previewTabs_->setTabVisible(3, false);
+    previewTabs_->setTabEnabled(4, false);
+    previewTabs_->setTabVisible(4, false);
 
     if (o.isStream) {
         std::string decoded;
@@ -887,8 +883,8 @@ void MainWindow::showObject(const Object& o) {
         if (o.subtype == "Image") {
             QImage img = renderObjectImage(pdf_, o);
             if (!img.isNull()) {
-                previewTabs_->setTabVisible(3, true);
-                previewTabs_->setTabEnabled(3, true);
+                previewTabs_->setTabVisible(4, true);
+                previewTabs_->setTabEnabled(4, true);
                 previewTabs_->setCurrentWidget(imageScroll_);
                 imagePixmap_ = QPixmap::fromImage(img);
                 updateImageLabel();
@@ -907,6 +903,8 @@ void MainWindow::showObject(const Object& o) {
     // clickable references, plus a page diagram for /Type /Page objects.
     structView_->clear();
     pageDiagram_->hide();
+    previewTabs_->setTabVisible(3, false);
+    previewTabs_->setTabEnabled(3, false);
     if (haveSource && !src.empty()) {
         buildObjectTree(src, structView_,
                         [this](long long id, QTreeWidgetItem* it) {
@@ -1061,75 +1059,81 @@ void MainWindow::showObject(const Object& o) {
                 if (!found) break;
             }
         }
-        if (isPage) {
-            pageDiagram_->setBox(mb[2] - mb[0], mb[3] - mb[1], rotate,
-                                 QString("Page %1  pt").arg(o.id));
-            pageDiagram_->show();
-        } else if (isPages) {
-            // Walk the whole subtree: from this /Pages node descend through
-            // /Kids (page or nested Pages nodes) and collect every /Page.
-            std::vector<int> pageIds;
-            std::function<void(long long)> walk = [&](long long cur) {
-                for (const Object& po : pdf_.objects) {
-                    if (po.id != cur) continue;
-                    std::string psrc;
-                    if (po.isStream || !pdf_.readObjectSource(po, psrc))
-                        return;
-                    PdfCursor q = 0;
-                    std::string ptype;
-                    std::vector<int> pkids;
-                    while (q < psrc.size()) {
-                        PdfToken u = nextPdfToken(psrc, q);
-                        if (u.kind == PdfToken::DictOpen) break;
-                        if (u.kind == PdfToken::End) break;
-                        q = u.end;
-                    }
-                    while (q < psrc.size()) {
-                        PdfToken u = nextPdfToken(psrc, q);
-                        if (u.kind == PdfToken::End ||
-                            u.kind == PdfToken::DictClose)
-                            break;
-                        q = u.end;
-                        if (u.kind != PdfToken::Name) continue;
-                        const std::string pk = u.text;
-                        if (pk == "Type") {
-                            PdfToken v = nextPdfToken(psrc, q);
-                            q = v.end;
-                            if (v.kind == PdfToken::Name) ptype = v.text;
-                        } else if (pk == "Kids") {
-                            PdfToken v = nextPdfToken(psrc, q);
-                            q = v.end;
-                            if (v.kind != PdfToken::ArrayOpen) continue;
-                            while (true) {
-                                PdfToken e = nextPdfToken(psrc, q);
-                                q = e.end;
-                                if (e.kind == PdfToken::ArrayClose ||
-                                    e.kind == PdfToken::End)
-                                    break;
-                                if (e.kind == PdfToken::Ref)
-                                    pkids.push_back(
-                                        static_cast<int>(e.refId));
+        if (isPage || isPages) {
+            if (isPage) {
+                pageDiagram_->setBox(mb[2] - mb[0], mb[3] - mb[1], rotate,
+                                     QString("Page %1  pt").arg(o.id));
+            } else {
+                // Walk the whole subtree: from this /Pages node descend through
+                // /Kids (page or nested Pages nodes) and collect every /Page.
+                std::vector<int> pageIds;
+                std::function<void(long long)> walk = [&](long long cur) {
+                    for (const Object& po : pdf_.objects) {
+                        if (po.id != cur) continue;
+                        std::string psrc;
+                        if (po.isStream || !pdf_.readObjectSource(po, psrc))
+                            return;
+                        PdfCursor q = 0;
+                        std::string ptype;
+                        std::vector<int> pkids;
+                        while (q < psrc.size()) {
+                            PdfToken u = nextPdfToken(psrc, q);
+                            if (u.kind == PdfToken::DictOpen) break;
+                            if (u.kind == PdfToken::End) break;
+                            q = u.end;
+                        }
+                        while (q < psrc.size()) {
+                            PdfToken u = nextPdfToken(psrc, q);
+                            if (u.kind == PdfToken::End ||
+                                u.kind == PdfToken::DictClose)
+                                break;
+                            q = u.end;
+                            if (u.kind != PdfToken::Name) continue;
+                            const std::string pk = u.text;
+                            if (pk == "Type") {
+                                PdfToken v = nextPdfToken(psrc, q);
+                                q = v.end;
+                                if (v.kind == PdfToken::Name) ptype = v.text;
+                            } else if (pk == "Kids") {
+                                PdfToken v = nextPdfToken(psrc, q);
+                                q = v.end;
+                                if (v.kind != PdfToken::ArrayOpen) continue;
+                                while (true) {
+                                    PdfToken e = nextPdfToken(psrc, q);
+                                    q = e.end;
+                                    if (e.kind == PdfToken::ArrayClose ||
+                                        e.kind == PdfToken::End)
+                                        break;
+                                    if (e.kind == PdfToken::Ref)
+                                        pkids.push_back(
+                                            static_cast<int>(e.refId));
+                                }
                             }
                         }
+                        if (ptype == "Page") {
+                            pageIds.push_back(static_cast<int>(cur));
+                        } else {
+                            for (int kid : pkids) walk(kid);
+                        }
+                        return;
                     }
-                    if (ptype == "Page") {
-                        pageIds.push_back(static_cast<int>(cur));
-                    } else {
-                        for (int kid : pkids) walk(kid);
-                    }
-                    return;
+                };
+                for (int kid : kids) walk(kid);
+                if (pageIds.empty() && countDir > 0) {
+                    // Fall back to /Count if the tree could not be walked.
+                    for (int i = 0; i < countDir; ++i)
+                        pageIds.push_back(static_cast<int>(o.id));
                 }
-            };
-            for (int kid : kids) walk(kid);
-            if (pageIds.empty() && countDir > 0) {
-                // Fall back to /Count if the tree could not be walked.
-                for (int i = 0; i < countDir; ++i)
-                    pageIds.push_back(static_cast<int>(o.id));
+                pageDiagram_->setPageTree(static_cast<int>(pageIds.size()),
+                                          pageIds,
+                                          QString("Pages tree  obj %1")
+                                              .arg(o.id));
             }
-            pageDiagram_->setPageTree(static_cast<int>(pageIds.size()),
-                                      pageIds,
-                                      QString("Pages tree  obj %1").arg(o.id));
+            // Show the diagram in its own Page tab.
             pageDiagram_->show();
+            previewTabs_->setTabVisible(3, true);
+            previewTabs_->setTabEnabled(3, true);
+            previewTabs_->setCurrentWidget(pageBox_);
         }
     }
     previewTabs_->setTabEnabled(0, true);
