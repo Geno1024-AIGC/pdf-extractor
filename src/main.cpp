@@ -1,12 +1,10 @@
 #include "cli.h"
 #include "mainwindow.h"
 
-#include <cstdlib>
-#include <iostream>
+#include <string>
 #include <vector>
 
 #include <QApplication>
-#include <QFileInfo>
 
 using namespace pdfx;
 
