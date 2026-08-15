@@ -32,6 +32,7 @@
 
 #include <cstdlib>
 #include <functional>
+#include <map>
 #include <set>
 
 #include "cli.h"
@@ -402,6 +403,64 @@ void buildObjectTree(const std::string& src, QTreeWidget* tree,
     root->setExpanded(true);
 }
 
+// Parse the first dict of object source `s` into a map of top-level key ->
+// value tokens. Nested dicts/arrays inside values are consumed whole; only a
+// value's direct Name/Number/Boolean/Ref/Keyword tokens are kept, so callers
+// can read /Type, /Count, /Kids refs, /MediaBox numbers, etc. even when those
+// keys come after a nested structure (e.g. /Resources << ... >>) in the dict.
+std::map<std::string, std::vector<PdfToken>>
+parseTopDict(const std::string& s) {
+    std::map<std::string, std::vector<PdfToken>> m;
+    PdfCursor c = 0;
+    PdfToken t = nextPdfToken(s, c);
+    c = t.end;
+    while (t.kind != PdfToken::DictOpen && t.kind != PdfToken::End) {
+        t = nextPdfToken(s, c);
+        c = t.end;
+    }
+    if (t.kind != PdfToken::DictOpen) return m;
+    while (true) {
+        PdfToken k = nextPdfToken(s, c);
+        c = k.end;
+        if (k.kind == PdfToken::DictClose || k.kind == PdfToken::End) break;
+        if (k.kind != PdfToken::Name) continue;
+        std::vector<PdfToken>& vv = m[k.text];
+        PdfToken v = nextPdfToken(s, c);
+        c = v.end;
+        if (v.kind == PdfToken::DictOpen) {
+            int depth = 1;
+            while (depth > 0) {
+                PdfToken u = nextPdfToken(s, c);
+                c = u.end;
+                if (u.kind == PdfToken::End) break;
+                if (u.kind == PdfToken::DictOpen) ++depth;
+                else if (u.kind == PdfToken::DictClose) --depth;
+            }
+            continue;  // nested dict contents are not top-level entries
+        }
+        if (v.kind == PdfToken::ArrayOpen) {
+            int depth = 1;
+            while (depth > 0) {
+                PdfToken u = nextPdfToken(s, c);
+                c = u.end;
+                if (u.kind == PdfToken::End) break;
+                if (u.kind == PdfToken::ArrayOpen ||
+                    u.kind == PdfToken::DictOpen)
+                    ++depth;
+                else if (u.kind == PdfToken::ArrayClose ||
+                         u.kind == PdfToken::DictClose)
+                    --depth;
+                else if (depth == 1)
+                    vv.push_back(u);  // direct array elements
+            }
+            continue;
+        }
+        if (v.kind == PdfToken::End) break;
+        vv.push_back(v);
+    }
+    return m;
+}
+
 // Dark theme, applied to the whole application.
 const char* kDarkStyle = R"QSS(
 * {
@@ -598,14 +657,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     previewTabs_ = new QTabWidget(this);
     previewTabs_->setTabPosition(QTabWidget::South);
+    previewTabs_->addTab(pageBox_, "Page");
     previewTabs_->addTab(structView_, "Structure");
     previewTabs_->addTab(preview_, "Text");
     previewTabs_->addTab(hexView_, "Hex");
-    previewTabs_->addTab(pageBox_, "Page");
     previewTabs_->addTab(imageScroll_, "Image");
-    previewTabs_->setTabVisible(3, false);
-    previewTabs_->setTabEnabled(3, false);
-    previewTabs_->setCurrentIndex(0);
+    previewTabs_->setTabVisible(0, false);
+    previewTabs_->setTabEnabled(0, false);
+    previewTabs_->setCurrentIndex(1);
 
     info_ = new CodeEditor(this);
 
@@ -903,8 +962,8 @@ void MainWindow::showObject(const Object& o) {
     // clickable references, plus a page diagram for /Type /Page objects.
     structView_->clear();
     pageDiagram_->hide();
-    previewTabs_->setTabVisible(3, false);
-    previewTabs_->setTabEnabled(3, false);
+    previewTabs_->setTabVisible(0, false);
+    previewTabs_->setTabEnabled(0, false);
     if (haveSource && !src.empty()) {
         buildObjectTree(src, structView_,
                         [this](long long id, QTreeWidgetItem* it) {
@@ -919,71 +978,53 @@ void MainWindow::showObject(const Object& o) {
                                            QString("object %1 — click to jump")
                                                .arg(id));
                         });
-        // Detect /Type /Page and /Type /Pages for the diagram. Scan past any
-        // "N G obj" header tokens to the first dict, collect /Kids, then walk
-        // the /Parent chain so /Page inherits /MediaBox and /Rotate.
-        PdfCursor c = 0;
+        // Detect /Type /Page and /Type /Pages for the diagram. Parse the
+        // object's top-level dict, collect /Kids, then follow the /Parent
+        // chain so /Page inherits /MediaBox and /Rotate.
+        const auto dm = parseTopDict(src);
         std::string type;
         std::vector<int> kids;
         long long parentRef = 0;
         int countDir = -1;       // /Count of the Pages node, if present
         double mb[4] = {0, 0, 612, 792};
         int rotate = 0;
-        while (c < src.size()) {
-            PdfToken t = nextPdfToken(src, c);
-            if (t.kind == PdfToken::DictOpen) break;
-            if (t.kind == PdfToken::End) break;
-            c = t.end;
-        }
-        while (c < src.size()) {
-            PdfToken t = nextPdfToken(src, c);
-            if (t.kind == PdfToken::End || t.kind == PdfToken::DictClose)
-                break;
-            c = t.end;
-            if (t.kind != PdfToken::Name) continue;
-            const std::string key2 = t.text;
+        for (const auto& kv : dm) {
+            const std::string& key2 = kv.first;
+            const auto& val = kv.second;
             if (key2 == "Type") {
-                PdfToken v = nextPdfToken(src, c);
-                c = v.end;
-                if (v.kind == PdfToken::Name) type = v.text;
+                for (const PdfToken& v : val)
+                    if (v.kind == PdfToken::Name) { type = v.text; break; }
             } else if (key2 == "Count") {
-                PdfToken v = nextPdfToken(src, c);
-                c = v.end;
-                try { countDir = std::stoi(v.text); } catch (...) { }
-            } else if (key2 == "Rotate") {
-                PdfToken v = nextPdfToken(src, c);
-                c = v.end;
-                try { rotate = std::stoi(v.text); } catch (...) { }
-            } else if (key2 == "Parent") {
-                PdfToken v = nextPdfToken(src, c);
-                c = v.end;
-                if (v.kind == PdfToken::Ref) parentRef = v.refId;
-            } else if (key2 == "MediaBox") {
-                PdfToken v = nextPdfToken(src, c);
-                c = v.end;
-                if (v.kind != PdfToken::ArrayOpen) continue;
-                int vals = 0;
-                while (vals < 4) {
-                    PdfToken e = nextPdfToken(src, c);
-                    c = e.end;
-                    if (e.kind == PdfToken::ArrayClose ||
-                        e.kind == PdfToken::End)
+                for (const PdfToken& v : val) {
+                    if (v.kind == PdfToken::Number) {
+                        try { countDir = std::stoi(v.text); } catch (...) { }
                         break;
-                    try { mb[vals] = std::stod(e.text); } catch (...) { mb[vals] = 0; }
-                    ++vals;
+                    }
+                }
+            } else if (key2 == "Rotate") {
+                for (const PdfToken& v : val) {
+                    if (v.kind == PdfToken::Number) {
+                        try { rotate = std::stoi(v.text); } catch (...) { }
+                        break;
+                    }
+                }
+            } else if (key2 == "Parent") {
+                for (const PdfToken& v : val)
+                    if (v.kind == PdfToken::Ref) { parentRef = v.refId; break; }
+            } else if (key2 == "MediaBox") {
+                int vals = 0;
+                for (const PdfToken& v : val) {
+                    if (v.kind != PdfToken::Number) continue;
+                    if (vals < 4) {
+                        try { mb[vals] = std::stod(v.text); }
+                        catch (...) { mb[vals] = 0; }
+                        ++vals;
+                    }
                 }
             } else if (key2 == "Kids") {
-                PdfToken v = nextPdfToken(src, c);
-                c = v.end;
-                if (v.kind != PdfToken::ArrayOpen) continue;
-                while (true) {
-                    PdfToken e = nextPdfToken(src, c);
-                    c = e.end;
-                    if (e.kind == PdfToken::ArrayClose ||
-                        e.kind == PdfToken::End) break;
-                    if (e.kind == PdfToken::Ref)
-                        kids.push_back(static_cast<int>(e.refId));
-                }
+                for (const PdfToken& v : val)
+                    if (v.kind == PdfToken::Ref)
+                        kids.push_back(static_cast<int>(v.refId));
             }
         }
         bool isPage = type == "Page";
@@ -1002,47 +1043,36 @@ void MainWindow::showObject(const Object& o) {
                     std::string psrc;
                     if (po.isStream || !pdf_.readObjectSource(po, psrc))
                         break;
-                    PdfCursor q = 0;
+                    const auto pm = parseTopDict(psrc);
                     double pband[2] = {0, 0};
                     int prot = 0;
                     long long pparent = 0;
                     bool gotBox = false;
-                    while (q < psrc.size()) {
-                        PdfToken u = nextPdfToken(psrc, q);
-                        if (u.kind == PdfToken::DictOpen) break;
-                        if (u.kind == PdfToken::End) break;
-                        q = u.end;
-                    }
-                    while (q < psrc.size()) {
-                        PdfToken u = nextPdfToken(psrc, q);
-                        if (u.kind == PdfToken::End ||
-                            u.kind == PdfToken::DictClose)
-                            break;
-                        q = u.end;
-                        if (u.kind != PdfToken::Name) continue;
-                        const std::string pk = u.text;
+                    for (const auto& kv : pm) {
+                        const std::string& pk = kv.first;
+                        const auto& val = kv.second;
                         if (pk == "Rotate") {
-                            PdfToken v = nextPdfToken(psrc, q);
-                            q = v.end;
-                            try { prot = std::stoi(v.text); } catch (...) { }
+                            for (const PdfToken& v : val) {
+                                if (v.kind != PdfToken::Number) continue;
+                                try { prot = std::stoi(v.text); }
+                                catch (...) { }
+                                break;
+                            }
                         } else if (pk == "Parent") {
-                            PdfToken v = nextPdfToken(psrc, q);
-                            q = v.end;
-                            if (v.kind == PdfToken::Ref) pparent = v.refId;
-                        } else if (pk == "MediaBox") {
-                            PdfToken v = nextPdfToken(psrc, q);
-                            q = v.end;
-                            if (v.kind != PdfToken::ArrayOpen) continue;
-                            int vals = 0;
-                            while (vals < 2) {
-                                PdfToken e = nextPdfToken(psrc, q);
-                                q = e.end;
-                                if (e.kind == PdfToken::ArrayClose ||
-                                    e.kind == PdfToken::End)
+                            for (const PdfToken& v : val)
+                                if (v.kind == PdfToken::Ref) {
+                                    pparent = v.refId;
                                     break;
-                                try { pband[vals] = std::stod(e.text); }
-                                catch (...) { pband[vals] = 0; }
-                                ++vals;
+                                }
+                        } else if (pk == "MediaBox") {
+                            int vals = 0;
+                            for (const PdfToken& v : val) {
+                                if (v.kind != PdfToken::Number) continue;
+                                if (vals < 2) {
+                                    try { pband[vals] = std::stod(v.text); }
+                                    catch (...) { pband[vals] = 0; }
+                                    ++vals;
+                                }
                             }
                             gotBox = true;
                         }
@@ -1073,41 +1103,23 @@ void MainWindow::showObject(const Object& o) {
                         std::string psrc;
                         if (po.isStream || !pdf_.readObjectSource(po, psrc))
                             return;
-                        PdfCursor q = 0;
+                        const auto pm = parseTopDict(psrc);
                         std::string ptype;
                         std::vector<int> pkids;
-                        while (q < psrc.size()) {
-                            PdfToken u = nextPdfToken(psrc, q);
-                            if (u.kind == PdfToken::DictOpen) break;
-                            if (u.kind == PdfToken::End) break;
-                            q = u.end;
-                        }
-                        while (q < psrc.size()) {
-                            PdfToken u = nextPdfToken(psrc, q);
-                            if (u.kind == PdfToken::End ||
-                                u.kind == PdfToken::DictClose)
-                                break;
-                            q = u.end;
-                            if (u.kind != PdfToken::Name) continue;
-                            const std::string pk = u.text;
+                        for (const auto& kv : pm) {
+                            const std::string& pk = kv.first;
+                            const auto& val = kv.second;
                             if (pk == "Type") {
-                                PdfToken v = nextPdfToken(psrc, q);
-                                q = v.end;
-                                if (v.kind == PdfToken::Name) ptype = v.text;
-                            } else if (pk == "Kids") {
-                                PdfToken v = nextPdfToken(psrc, q);
-                                q = v.end;
-                                if (v.kind != PdfToken::ArrayOpen) continue;
-                                while (true) {
-                                    PdfToken e = nextPdfToken(psrc, q);
-                                    q = e.end;
-                                    if (e.kind == PdfToken::ArrayClose ||
-                                        e.kind == PdfToken::End)
+                                for (const PdfToken& v : val)
+                                    if (v.kind == PdfToken::Name) {
+                                        ptype = v.text;
                                         break;
-                                    if (e.kind == PdfToken::Ref)
+                                    }
+                            } else if (pk == "Kids") {
+                                for (const PdfToken& v : val)
+                                    if (v.kind == PdfToken::Ref)
                                         pkids.push_back(
-                                            static_cast<int>(e.refId));
-                                }
+                                            static_cast<int>(v.refId));
                             }
                         }
                         if (ptype == "Page") {
@@ -1131,12 +1143,12 @@ void MainWindow::showObject(const Object& o) {
             }
             // Show the diagram in its own Page tab.
             pageDiagram_->show();
-            previewTabs_->setTabVisible(3, true);
-            previewTabs_->setTabEnabled(3, true);
-            previewTabs_->setCurrentWidget(pageBox_);
+            previewTabs_->setTabVisible(0, true);
+            previewTabs_->setTabEnabled(0, true);
+            previewTabs_->setCurrentIndex(0);
         }
     }
-    previewTabs_->setTabEnabled(0, true);
+    previewTabs_->setTabEnabled(1, true);
 }
 
 void MainWindow::gotoRefItem(QTreeWidgetItem* item) {
