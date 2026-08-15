@@ -42,6 +42,7 @@ private:
     CodeEditor* info_;
     QStackedWidget* previewStack_;
     QLabel* imageLabel_;
+    QScrollArea* imageScroll_;
     QPlainTextEdit* console_;
     QLineEdit* command_;
     QLabel* status_;

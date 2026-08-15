@@ -136,14 +136,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     imageLabel_ = new QLabel(this);
     imageLabel_->setAlignment(Qt::AlignCenter);
-    auto* imageScroll = new QScrollArea(this);
-    imageScroll->setWidget(imageLabel_);
-    imageScroll->setWidgetResizable(true);
+    imageScroll_ = new QScrollArea(this);
+    imageScroll_->setWidget(imageLabel_);
+    imageScroll_->setWidgetResizable(true);
     imageLabel_->setTextInteractionFlags(Qt::NoTextInteraction);
 
     previewStack_ = new QStackedWidget(this);
     previewStack_->addWidget(preview_);
-    previewStack_->addWidget(imageScroll);
+    previewStack_->addWidget(imageScroll_);
 
     info_ = new CodeEditor(this);
 
@@ -332,7 +332,7 @@ void MainWindow::showObject(const Object& o) {
             if (img.loadFromData(
                     reinterpret_cast<const uchar*>(decoded.data()),
                     static_cast<int>(decoded.size()))) {
-                previewStack_->setCurrentWidget(imageLabel_->parentWidget());
+                previewStack_->setCurrentWidget(imageScroll_);
                 imageLabel_->setPixmap(
                     QPixmap::fromImage(img).scaled(
                         imageLabel_->size(), Qt::KeepAspectRatio,
@@ -376,8 +376,7 @@ void MainWindow::showObject(const Object& o) {
                                      stride, fmt, nullptr, nullptr);
                     }
                     if (!img.isNull()) {
-                        previewStack_->setCurrentWidget(
-                            imageLabel_->parentWidget());
+                        previewStack_->setCurrentWidget(imageScroll_);
                         imageLabel_->setPixmap(
                             QPixmap::fromImage(img).scaled(
                                 imageLabel_->size(), Qt::KeepAspectRatio,
