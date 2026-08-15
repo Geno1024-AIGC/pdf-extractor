@@ -1,6 +1,8 @@
 #include "mainwindow.h"
 
 #include <QAbstractItemView>
+#include <QAction>
+#include <QApplication>
 #include <QDir>
 #include <QFile>
 #include <QFileDialog>
@@ -11,15 +13,17 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QMenuBar>
 #include <QPlainTextEdit>
 #include <QPoint>
 #include <QPixmap>
 #include <QPushButton>
 #include <QScrollArea>
-#include <QStackedWidget>
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QTableWidgetItem>
+#include <QTreeWidget>
+#include <QTreeWidgetItem>
 #include <QVBoxLayout>
 
 #include "cli.h"
@@ -35,6 +39,70 @@ QString filterText(const Object& o) {
         f += QString::fromStdString(s);
     }
     return f;
+}
+
+// Render an image stream object to a QImage, handling both embedded file
+// formats (JPEG/PNG data) and raw pixel samples (FlateDecode + predictor).
+QImage renderObjectImage(const PdfFile& pdf, const Object& o) {
+    QImage out;
+    std::string decoded;
+    if (!pdf.readStreamDecoded(o, decoded)) return out;
+    if (out.loadFromData(
+            reinterpret_cast<const uchar*>(decoded.data()),
+            static_cast<int>(decoded.size())))
+        return out;
+    std::vector<unsigned char> samples;
+    if (!applyPredictor(o, decoded, samples) || o.width <= 0 ||
+        o.height <= 0 || o.bitsPerComponent != 8)
+        return out;
+    QImage::Format fmt = QImage::Format_Invalid;
+    switch (o.components) {
+        case 1: fmt = QImage::Format_Grayscale8; break;
+        case 3: fmt = QImage::Format_RGB888; break;
+        case 4: fmt = QImage::Format_RGB32; break;
+        default: return out;
+    }
+    const int stride = o.width * o.components;
+    if (samples.size() <
+        static_cast<size_t>(o.height) * static_cast<size_t>(stride))
+        return out;
+    if (o.components == 4) {
+        for (size_t i = 0; i + 4 <= samples.size(); i += 4) {
+            const int c = samples[i], m = samples[i + 1];
+            const int y = samples[i + 2], k = samples[i + 3];
+            samples[i] = static_cast<unsigned char>((255 - c) * (255 - k) / 255);
+            samples[i + 1] = static_cast<unsigned char>((255 - m) * (255 - k) / 255);
+            samples[i + 2] = static_cast<unsigned char>((255 - y) * (255 - k) / 255);
+            samples[i + 3] = 255;
+        }
+        return QImage(samples.data(), o.width, o.height, stride,
+                      QImage::Format_RGB32);
+    }
+    return QImage(samples.data(), o.width, o.height, stride, fmt, nullptr,
+                  nullptr);
+}
+
+// Build a hex dump of `bytes`, capped at `maxBytes`.
+QString hexDump(const std::string& bytes, size_t maxBytes) {
+    QString out;
+    size_t shown = 0;
+    for (unsigned char c : bytes) {
+        if (shown == 0) {
+            char line[16];
+            std::snprintf(line, sizeof(line), "%04zx: ", shown);
+            out += QString::fromLatin1(line);
+        }
+        char h[4];
+        std::snprintf(h, sizeof(h), "%02x ", c);
+        out += QString::fromLatin1(h);
+        if (++shown % 16 == 0) out += "\n";
+        if (shown >= maxBytes) {
+            out += "…\n[truncated]";
+            break;
+        }
+    }
+    if (out.isEmpty()) out = "(empty)";
+    return out;
 }
 
 // Dark theme, applied to the whole application.
@@ -201,11 +269,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle("PDF Extractor");
     outDir_ = QDir::currentPath();
 
-    openBtn_ = new QPushButton("Open PDF", this);
-    extractBtn_ = new QPushButton("Extract Selected", this);
-    extractBtn_->setEnabled(false);
-    themeBtn_ = new QPushButton("Light", this);
-
     table_ = new QTableWidget(this);
     table_->setColumnCount(6);
     table_->setHorizontalHeaderLabels(
@@ -216,6 +279,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     table_->horizontalHeader()->setStretchLastSection(true);
 
     preview_ = new CodeEditor(this);
+    hexView_ = new CodeEditor(this);
 
     imageLabel_ = new QLabel(this);
     imageLabel_->setAlignment(Qt::AlignCenter);
@@ -223,10 +287,20 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     imageScroll_->setWidget(imageLabel_);
     imageScroll_->setWidgetResizable(true);
     imageLabel_->setTextInteractionFlags(Qt::NoTextInteraction);
+    imageScroll_->hide();
 
-    previewStack_ = new QStackedWidget(this);
-    previewStack_->addWidget(preview_);
-    previewStack_->addWidget(imageScroll_);
+    structView_ = new QTreeWidget(this);
+    structView_->setHeaderLabels({"Key", "Value"});
+    structView_->hide();
+
+    previewTabs_ = new QTabWidget(this);
+    previewTabs_->setTabPosition(QTabWidget::South);
+    previewTabs_->addTab(preview_, "Text");
+    previewTabs_->addTab(hexView_, "Hex");
+    previewTabs_->addTab(imageScroll_, "Image");
+    previewTabs_->addTab(structView_, "Structure");
+    previewTabs_->setTabEnabled(2, false);
+    previewTabs_->setTabEnabled(3, false);
 
     info_ = new CodeEditor(this);
 
@@ -242,7 +316,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     status_->setText("ready");
 
     auto* tabs = new QTabWidget(this);
-    tabs->addTab(previewStack_, "Preview");
+    tabs->addTab(previewTabs_, "Preview");
     tabs->addTab(info_, "Info");
     tabs->addTab(console_, "Console");
 
@@ -250,18 +324,26 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     cols->addWidget(table_, 3);
     cols->addWidget(tabs, 2);
 
-    auto* toolbar = new QHBoxLayout;
-    toolbar->addWidget(openBtn_);
-    toolbar->addWidget(extractBtn_);
-    toolbar->addStretch(1);
-    toolbar->addWidget(themeBtn_);
+    auto* fileMenu = menuBar()->addMenu("&File");
+    QAction* openAct = fileMenu->addAction("&Open PDF…", this,
+                                          &MainWindow::openPdf);
+    openAct->setShortcut(QKeySequence::Open);
+    fileMenu->addAction("&Export All Images…", this,
+                        &MainWindow::exportAllImages);
+    fileMenu->addSeparator();
+    fileMenu->addAction("E&xit", qApp, &QApplication::quit);
+    auto* extractMenu = menuBar()->addMenu("E&xtract");
+    extractMenu->addAction("Extract &Selected…", this,
+                           &MainWindow::extractSelected);
+    auto* viewMenu = menuBar()->addMenu("&View");
+    viewMenu->addAction("Toggle &Dark / Light", this,
+                        &MainWindow::toggleTheme);
 
     auto* cmdRow = new QHBoxLayout;
     cmdRow->addWidget(new QLabel(QString::fromUtf8("\u203a"), this));
     cmdRow->addWidget(command_);
 
     auto* root = new QVBoxLayout;
-    root->addLayout(toolbar);
     root->addLayout(cols, 1);
     root->addLayout(cmdRow);
     root->addWidget(status_);
@@ -270,10 +352,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     central->setLayout(root);
     setCentralWidget(central);
 
-    connect(openBtn_, &QPushButton::clicked, this, &MainWindow::openPdf);
-    connect(extractBtn_, &QPushButton::clicked, this,
-            &MainWindow::extractSelected);
-    connect(themeBtn_, &QPushButton::clicked, this, &MainWindow::toggleTheme);
     connect(command_, &QLineEdit::returnPressed, this, &MainWindow::runCommand);
     connect(table_, &QTableWidget::itemSelectionChanged, this,
             &MainWindow::onRowChanged);
@@ -313,7 +391,6 @@ void MainWindow::applyStyle() {
 
 void MainWindow::toggleTheme() {
     dark_ = !dark_;
-    themeBtn_->setText(dark_ ? "Light" : "Dark");
     applyStyle();
 }
 
@@ -335,7 +412,6 @@ void MainWindow::openPath(const QString& path) {
                          .arg(QFileInfo(path).fileName())
                          .arg(pdf_.objects.size())
                          .arg(nStream));
-    extractBtn_->setEnabled(true);
 }
 
 void MainWindow::openPdf() {
@@ -365,6 +441,49 @@ void MainWindow::extractSelected() {
     } else {
         log("extraction failed for obj " + QString::number(o.id));
     }
+}
+
+void MainWindow::exportAllImages() {
+    if (pdf_.objects.empty()) {
+        status_->setText("no file loaded");
+        return;
+    }
+    const QString dir = QFileDialog::getExistingDirectory(
+        this, "Export all images to directory", outDir_);
+    if (dir.isEmpty()) return;
+    outDir_ = dir;
+    int saved = 0;
+    for (const auto& o : pdf_.objects) {
+        if (!o.isStream || o.subtype != "Image") continue;
+        const QImage img = renderObjectImage(pdf_, o);
+        if (img.isNull()) {
+            log("obj " + QString::number(o.id) + ": image render failed");
+            continue;
+        }
+        QString fmt = "PNG";
+        QString ext = "png";
+        for (const auto& f : o.filters) {
+            if (f == "DCTDecode") {
+                fmt = "JPEG";
+                ext = "jpg";
+                break;
+            }
+            if (f == "JPXDecode") {
+                fmt = "JPEG2000";
+                ext = "jp2";
+                break;
+            }
+        }
+        const QString path =
+            dir + "/image_" + QString::number(o.id) + "." + ext;
+        if (img.save(path, fmt.toLatin1().constData())) {
+            ++saved;
+            log("exported obj " + QString::number(o.id) + " -> " + path);
+        } else {
+            log("obj " + QString::number(o.id) + ": save failed");
+        }
+    }
+    status_->setText(QString("exported %1 image(s)").arg(saved));
 }
 
 void MainWindow::fillTable() {
@@ -427,103 +546,88 @@ void MainWindow::fillInfo() {
 
 void MainWindow::showObject(const Object& o) {
     contextObjId_ = o.id;
-    if (!o.isStream) {
-        previewStack_->setCurrentWidget(preview_);
-        std::string src;
-        if (pdf_.readObjectSource(o, src)) {
-            preview_->setPlainText(QString::fromStdString(src));
-        } else {
-            preview_->setPlainText(
-                "object " + QString::number(o.id) +
-                " is not a stream (type " + QString::fromStdString(o.type) +
-                "); no source text found");
-        }
-        return;
-    }
 
-    std::string decoded;
-    if (pdf_.readStreamDecoded(o, decoded)) {
-        // Try rendering image streams: DCTDecode arrives as real JPEG, while
-        // FlateDecode image streams are raw samples that need predictor
-        // inversion (see applyPredictor) before a QImage can be built.
+    // Raw source text for every object kind.
+    std::string src;
+    const bool haveSource = pdf_.readObjectSource(o, src);
+
+    // Text tab: decoded stream (text streams) or raw object source (others).
+    preview_->clear();
+    previewTabs_->setTabEnabled(2, false);
+    previewTabs_->setTabEnabled(3, false);
+    previewTabs_->setTabVisible(3, false);
+    previewTabs_->setTabVisible(2, false);
+
+    if (o.isStream) {
+        std::string decoded;
+        if (pdf_.readStreamDecoded(o, decoded)) {
+            preview_->setPlainText(
+                QString::fromStdString(makePreview(decoded, 8192, false)));
+            hexView_->setPlainText(hexDump(decoded, 65536));
+        } else {
+            std::string raw;
+            if (pdf_.readStream(o, raw)) {
+                preview_->setPlainText(
+                    "[decode failed, showing raw bytes]\n" +
+                    QString::fromStdString(makePreview(raw, 8192, false)));
+                hexView_->setPlainText(hexDump(raw, 65536));
+            } else {
+                preview_->setPlainText("could not read stream data");
+            }
+        }
         if (o.subtype == "Image") {
-            QImage img;
-            if (img.loadFromData(
-                    reinterpret_cast<const uchar*>(decoded.data()),
-                    static_cast<int>(decoded.size()))) {
-                previewStack_->setCurrentWidget(imageScroll_);
+            QImage img = renderObjectImage(pdf_, o);
+            if (!img.isNull()) {
+                previewTabs_->setTabVisible(2, true);
+                previewTabs_->setTabEnabled(2, true);
+                previewTabs_->setCurrentWidget(imageScroll_);
                 imagePixmap_ = QPixmap::fromImage(img);
                 updateImageLabel();
-                contextObjId_ = o.id;
-                return;
             }
-            std::vector<unsigned char> samples;
-            if (applyPredictor(o, decoded, samples) && o.width > 0 &&
-                o.height > 0 && o.bitsPerComponent == 8) {
-                QImage::Format fmt = QImage::Format_Invalid;
-                switch (o.components) {
-                    case 1: fmt = QImage::Format_Grayscale8; break;
-                    case 3: fmt = QImage::Format_RGB888; break;
-                    case 4: fmt = QImage::Format_RGB32; break;
-                    default: break;
-                }
-                const int stride = o.width * o.components;
-                const size_t need = static_cast<size_t>(o.height) * stride;
-                if (fmt != QImage::Format_Invalid &&
-                    samples.size() >= need) {
-                    QImage img;
-                    if (o.components == 4) {
-                        // CMYK is byte-packed as 4 samples per pixel; no
-                        // matching QImage::Format, so convert to RGB32 first.
-                        for (size_t i = 0; i + 4 <= samples.size(); i += 4) {
-                            const int c = samples[i], m = samples[i + 1];
-                            const int y = samples[i + 2], k = samples[i + 3];
-                            samples[i] = static_cast<unsigned char>(
-                                (255 - c) * (255 - k) / 255);
-                            samples[i + 1] = static_cast<unsigned char>(
-                                (255 - m) * (255 - k) / 255);
-                            samples[i + 2] = static_cast<unsigned char>(
-                                (255 - y) * (255 - k) / 255);
-                            samples[i + 3] = 255;
-                        }
-                        img = QImage(samples.data(), o.width, o.height,
-                                     stride, QImage::Format_RGB32);
-                    } else {
-                        img = QImage(samples.data(), o.width, o.height,
-                                     stride, fmt, nullptr, nullptr);
-                    }
-                    if (!img.isNull()) {
-                        previewStack_->setCurrentWidget(imageScroll_);
-                        imagePixmap_ = QPixmap::fromImage(img);
-                        updateImageLabel();
-                        contextObjId_ = o.id;
-                        return;
-                    }
-                }
-            }
-            previewStack_->setCurrentWidget(preview_);
-            preview_->setPlainText(
-                "[image: width=" + QString::number(o.width) +
-                " height=" + QString::number(o.height) +
-                " bits=" + QString::number(o.bitsPerComponent) +
-                " colorspace=" + QString::fromStdString(o.colorspace) +
-                " predictor=" + QString::number(o.predictor) +
-                "]\n" + QString::fromStdString(makePreview(decoded, 4096, false)));
-            return;
         }
-        previewStack_->setCurrentWidget(preview_);
-        preview_->setPlainText(
-            QString::fromStdString(makePreview(decoded, 4096, false)));
     } else {
-        std::string raw;
-        if (pdf_.readStream(o, raw)) {
-            previewStack_->setCurrentWidget(preview_);
-            preview_->setPlainText(
-                "[decode failed, showing raw bytes]\n" +
-                QString::fromStdString(makePreview(raw, 4096, false)));
-        } else {
-            previewStack_->setCurrentWidget(preview_);
-            preview_->setPlainText("could not read stream data");
+        preview_->setPlainText(
+            haveSource ? QString::fromStdString(src)
+                       : QString("object %1 is not a stream (type %2); "
+                                 "no source text found")
+                             .arg(o.id)
+                             .arg(QString::fromStdString(o.type)));
+    }
+
+    // Structure tab mirrors the source syntax tree for dict/array sources.
+    structView_->clear();
+    QString type = QString::fromStdString(o.type);
+    QString subtype = QString::fromStdString(o.subtype);
+    auto insertPair = [&](const QString& k, const QString& v) {
+        auto* it = new QTreeWidgetItem(structView_);
+        it->setText(0, k);
+        it->setText(1, v);
+        structView_->addTopLevelItem(it);
+    };
+    if (o.isStream) {
+        insertPair("Object", QString::number(o.id));
+        insertPair("Type", "stream");
+        if (type != "stream") insertPair("Declared /Type", type);
+        if (!subtype.isEmpty()) insertPair("Subtype", subtype);
+        insertPair("Length", QString::number(o.rawLength));
+        insertPair("Filters", filterText(o));
+        if (o.width > 0) insertPair("Width", QString::number(o.width));
+        if (o.height > 0) insertPair("Height", QString::number(o.height));
+        if (o.bitsPerComponent > 0)
+            insertPair("BitsPerComponent", QString::number(o.bitsPerComponent));
+        if (!o.colorspace.empty())
+            insertPair("ColorSpace", QString::fromStdString(o.colorspace));
+        insertPair("Predictor", QString::number(o.predictor));
+        previewTabs_->setTabVisible(3, true);
+        previewTabs_->setTabEnabled(3, true);
+    } else {
+        // Non-stream object: show the scalar value (name/number/string/dict).
+        insertPair("Object", QString::number(o.id));
+        insertPair("Type", type);
+        previewTabs_->setTabVisible(3, true);
+        previewTabs_->setTabEnabled(3, true);
+        if (haveSource && !src.empty()) {
+            insertPair("Source", QString::fromStdString(src).trimmed());
         }
     }
 }

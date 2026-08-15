@@ -7,15 +7,15 @@
 #include "codeeditor.h"
 #include "pdfparser.h"
 
-class QTableWidget;
+class QAction;
 class QLineEdit;
 class QLabel;
 class QPushButton;
-class QStackedWidget;
 class QScrollArea;
 class QPixmap;
-class QContextMenuEvent;
-class QResizeEvent;
+class QTableWidget;
+class QTabWidget;
+class QTreeWidget;
 
 namespace pdfx {
 
@@ -28,6 +28,7 @@ public:
 private slots:
     void openPdf();
     void extractSelected();
+    void exportAllImages();
     void runCommand();
     void onRowChanged();
     void showTableMenu(const QPoint& pos);
@@ -48,15 +49,14 @@ private:
     void fillInfo();
     void log(const QString& text);
     void updateImageLabel();
-    QPushButton* openBtn_;
-    QPushButton* extractBtn_;
-    QPushButton* themeBtn_;
+    QTabWidget* previewTabs_;
     QTableWidget* table_;
     CodeEditor* preview_;
+    CodeEditor* hexView_;
     CodeEditor* info_;
-    QStackedWidget* previewStack_;
     QLabel* imageLabel_;
     QScrollArea* imageScroll_;
+    QTreeWidget* structView_;
     QPlainTextEdit* console_;
     QLineEdit* command_;
     QLabel* status_;
