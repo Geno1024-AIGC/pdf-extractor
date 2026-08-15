@@ -13,10 +13,20 @@
 class PageDiagram : public QWidget {
     Q_OBJECT
 public:
+    // A rectangular region on the page in user-space coordinates (y up),
+    // typically a `cm`-transformed area where a `/Name Do` paints an image
+    // or form XObject. objId links it to the resolved target object.
+    struct ContentBox {
+        double x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+        long long objId = 0;
+        QString label;
+    };
+
     explicit PageDiagram(QWidget* parent = nullptr);
     void setBox(double w, double h, int rotate, const QString& sizeLabel);
     void setPageTree(int count, const std::vector<int>& kids,
                      const QString& label);
+    void setContentBoxes(const std::vector<ContentBox>& boxes);
     void clearDiagram();
 
 signals:
@@ -39,6 +49,8 @@ private:
     int treeCount_ = 0;
     std::vector<int> kids_;
     std::vector<QRect> tiles_;  // grid tile geometry for hit-testing
+    std::vector<ContentBox> contentBoxes_;  // user-space overlays
+    std::vector<QRect> boxRects_;           // screen rects for hit-testing
 };
 
 #endif  // PAGEDIAGRAM_H

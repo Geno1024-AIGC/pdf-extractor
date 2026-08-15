@@ -19,6 +19,8 @@ void PageDiagram::setBox(double w, double h, int rotate,
     sizeLabel_ = sizeLabel;
     treeMode_ = false;
     tiles_.clear();
+    contentBoxes_.clear();
+    boxRects_.clear();
     update();
 }
 
@@ -45,6 +47,14 @@ void PageDiagram::clearDiagram() {
     sizeLabel_.clear();
     treeMode_ = false;
     tiles_.clear();
+    contentBoxes_.clear();
+    boxRects_.clear();
+    update();
+}
+
+void PageDiagram::setContentBoxes(const std::vector<ContentBox>& boxes) {
+    contentBoxes_ = boxes;
+    boxRects_.clear();
     update();
 }
 
@@ -148,19 +158,51 @@ void PageDiagram::paintEvent(QPaintEvent*) {
         p.setBrush(QColor(0x4a, 0x6c, 0xf7));
         p.drawPath(path);
     }
+    // Overlay the `cm`-transformed content boxes on the page rectangle.
+    boxRects_.clear();
+    QFont boxF = p.font();
+    boxF.setPixelSize(10);
+    p.setFont(boxF);
+    for (const ContentBox& b : contentBoxes_) {
+        const int sx = px + static_cast<int>(b.x0 * scale);
+        const int sy = py + ph - static_cast<int>(b.y1 * scale);
+        const int sw = static_cast<int>((b.x1 - b.x0) * scale);
+        const int sh = static_cast<int>((b.y1 - b.y0) * scale);
+        if (sw <= 0 || sh <= 0) continue;
+        boxRects_.push_back(QRect(sx, sy, sw, sh));
+        p.setPen(QPen(QColor(0x4a, 0x6c, 0xf7), 1));
+        p.setBrush(QColor(0x4a, 0x6c, 0xf7, 70));
+        p.drawRect(sx, sy, sw, sh);
+        QRect lr(sx, sy - 14, sw, 14);
+        if (lr.top() < py + 2) lr.moveTop(sy);
+        p.setPen(b.objId > 0
+                     ? QColor(0x7c, 0x9c, 0xff)
+                     : QColor(0x9a, 0xa0, 0xc3));
+        p.drawText(lr, Qt::AlignLeft | Qt::AlignVCenter, b.label);
+    }
 }
 
 void PageDiagram::mouseReleaseEvent(QMouseEvent* event) {
-    if (!treeMode_) {
+    const QPoint pos = event->pos();
+    if (treeMode_) {
+        for (int i = 0; i < static_cast<int>(tiles_.size()); ++i) {
+            if (tiles_[i].contains(pos)) {
+                const int kid =
+                    i < static_cast<int>(kids_.size()) ? kids_[i] : 0;
+                if (kid > 0) emit pageClicked(kid);
+                break;
+            }
+        }
         QWidget::mouseReleaseEvent(event);
         return;
     }
-    const QPoint pos = event->pos();
-    for (int i = 0; i < static_cast<int>(tiles_.size()); ++i) {
-        if (tiles_[i].contains(pos)) {
-            const int kid =
-                i < static_cast<int>(kids_.size()) ? kids_[i] : 0;
-            if (kid > 0) emit pageClicked(kid);
+    for (int i = 0; i < static_cast<int>(boxRects_.size()); ++i) {
+        if (boxRects_[i].contains(pos)) {
+            const long long obj =
+                i < static_cast<int>(contentBoxes_.size())
+                    ? contentBoxes_[i].objId
+                    : 0;
+            if (obj > 0) emit pageClicked(static_cast<int>(obj));
             break;
         }
     }

@@ -31,6 +31,7 @@
 #include <QVBoxLayout>
 
 #include <cstdlib>
+#include <algorithm>
 #include <functional>
 #include <map>
 #include <set>
@@ -247,7 +248,7 @@ PdfToken nextPdfToken(const std::string& s, PdfCursor& c) {
         t.end = numEnd;
         return t;
     }
-    if (ch >= 'a' && ch <= 'z') {
+    if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')) {
         size_t p = c;
         while (p < n && ((s[p] >= 'a' && s[p] <= 'z') ||
                (s[p] >= 'A' && s[p] <= 'Z'))) ++p;
@@ -459,6 +460,176 @@ parseTopDict(const std::string& s) {
         vv.push_back(v);
     }
     return m;
+}
+
+// --- Content-stream scanning and XObject resolution ------------------------
+// Parse the first dict of an object and recover every value, *including*
+// nested dict/array bodies which parseTopDict deliberately drops. The raw
+// substring is kept so the value can be re-parsed with parseTopDict.
+struct TopValue {
+    enum Kind { None, Ref, Num, Dict, Array, Other } kind = None;
+    long long refId = 0;
+    std::string raw;
+};
+
+std::map<std::string, TopValue> parseTopValues(const std::string& s) {
+    std::map<std::string, TopValue> m;
+    PdfCursor c = 0;
+    PdfToken t = nextPdfToken(s, c);
+    c = t.end;
+    while (t.kind != PdfToken::DictOpen && t.kind != PdfToken::End) {
+        t = nextPdfToken(s, c);
+        c = t.end;
+    }
+    if (t.kind != PdfToken::DictOpen) return m;
+    while (true) {
+        PdfToken k = nextPdfToken(s, c);
+        c = k.end;
+        if (k.kind == PdfToken::DictClose || k.kind == PdfToken::End) break;
+        if (k.kind != PdfToken::Name) continue;
+        const size_t before = c;
+        TopValue tv;
+        PdfToken v = nextPdfToken(s, c);
+        c = v.end;
+        if (v.kind == PdfToken::DictOpen || v.kind == PdfToken::ArrayOpen) {
+            int depth = 1;
+            while (depth > 0) {
+                PdfToken u = nextPdfToken(s, c);
+                c = u.end;
+                if (u.kind == PdfToken::End) break;
+                if (u.kind == PdfToken::DictOpen ||
+                    u.kind == PdfToken::ArrayOpen)
+                    ++depth;
+                else if (u.kind == PdfToken::DictClose ||
+                         u.kind == PdfToken::ArrayClose)
+                    --depth;
+            }
+            tv.kind =
+                v.kind == PdfToken::DictOpen ? TopValue::Dict : TopValue::Array;
+            tv.raw = s.substr(before, c - before);
+        } else if (v.kind == PdfToken::Ref) {
+            tv.kind = TopValue::Ref;
+            tv.refId = v.refId;
+        } else if (v.kind == PdfToken::Number) {
+            tv.kind = TopValue::Num;
+            tv.raw = v.text;
+        } else if (v.kind != PdfToken::End) {
+            tv.kind = TopValue::Other;
+            tv.raw = v.text;
+        }
+        m[k.text] = tv;
+    }
+    return m;
+}
+
+// Textual source of a non-stream object, empty if not found.
+std::string objectSource(const PdfFile& pdf, long long id) {
+    for (const Object& o : pdf.objects)
+        if (o.id == id && !o.isStream) {
+            std::string s;
+            if (pdf.readObjectSource(o, s)) return s;
+        }
+    return std::string();
+}
+
+// Resolve the `/Resources -> /XObject` chain of a /Page dict and fill `out`
+// with each XObject name -> object id, so a `/Name Do` in a content stream
+// can be linked to the object it paints.
+void resolveXObjectMap(const PdfFile& pdf, const std::string& pgSrc,
+                       std::map<std::string, long long>& out) {
+    auto pg = parseTopValues(pgSrc);
+    auto resIt = pg.find("Resources");
+    if (resIt == pg.end()) return;
+    std::string resSrc;
+    if (resIt->second.kind == TopValue::Ref)
+        resSrc = objectSource(pdf, resIt->second.refId);
+    else if (resIt->second.kind == TopValue::Dict)
+        resSrc = resIt->second.raw;
+    if (resSrc.empty()) return;
+    auto rv = parseTopValues(resSrc);
+    auto xoIt = rv.find("XObject");
+    if (xoIt == rv.end()) return;
+    std::string xoSrc;
+    if (xoIt->second.kind == TopValue::Ref)
+        xoSrc = objectSource(pdf, xoIt->second.refId);
+    else if (xoIt->second.kind == TopValue::Dict)
+        xoSrc = xoIt->second.raw;
+    if (xoSrc.empty()) return;
+    auto xv = parseTopValues(xoSrc);
+    for (const auto& kv : xv)
+        if (kv.second.kind == TopValue::Ref) out[kv.first] = kv.second.refId;
+}
+
+// A `cm`-transformed region that a `/Name Do` paints over, in user space.
+struct ContentBoxHit {
+    std::string name;  // XObject name, without '/'
+    double x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+};
+
+// Token-scan a content stream, track the CTM (`q`/`Q` stack + `cm`), and
+// record a box for every `/Name Do` as the bounding rect of the unit square
+// transformed through the current matrix.
+std::vector<ContentBoxHit> scanContentBoxes(const std::string& content) {
+    std::vector<ContentBoxHit> hits;
+    PdfCursor c = 0;
+    std::vector<double> current = {1, 0, 0, 1, 0, 0};
+    std::vector<std::vector<double>> saved;
+    std::vector<double> pending;
+    std::string lastName;
+    while (true) {
+        PdfToken t = nextPdfToken(content, c);
+        c = t.end;
+        if (t.kind == PdfToken::End) break;
+        if (t.kind == PdfToken::Number) {
+            try { pending.push_back(std::stod(t.text)); }
+            catch (...) { }
+            continue;
+        }
+        if (t.kind == PdfToken::Name) {
+            lastName = t.text;
+            continue;
+        }
+        if (t.kind != PdfToken::Keyword) continue;
+        if (t.text == "q") {
+            saved.push_back(current);
+        } else if (t.text == "Q") {
+            if (!saved.empty()) {
+                current = saved.back();
+                saved.pop_back();
+            }
+        } else if (t.text == "cm") {
+            const size_t n = pending.size();
+            if (n >= 6) {
+                const double A = pending[n - 6], B = pending[n - 5],
+                             C = pending[n - 4], D = pending[n - 3],
+                             E = pending[n - 2], F = pending[n - 1];
+                const double a = current[0], b = current[1], cc = current[2],
+                             d = current[3], e = current[4], f = current[5];
+                current = {a * A + cc * B, b * A + d * B, a * C + cc * D,
+                           b * C + d * D, a * E + cc * F + e,
+                           b * E + d * F + f};
+            }
+            pending.clear();
+        } else if (t.text == "Do" && !lastName.empty()) {
+            const double a = current[0], b = current[1], cc = current[2],
+                         d = current[3], e = current[4], f = current[5];
+            const double cor[8] = {e,     f, a + e, b + f, cc + e, d + f,
+                                   a + cc + e, b + d + f};
+            ContentBoxHit h;
+            h.name = lastName;
+            h.x0 = h.x1 = cor[0];
+            h.y0 = h.y1 = cor[1];
+            for (int i = 0; i < 4; ++i) {
+                h.x0 = std::min(h.x0, cor[i * 2]);
+                h.x1 = std::max(h.x1, cor[i * 2]);
+                h.y0 = std::min(h.y0, cor[i * 2 + 1]);
+                h.y1 = std::max(h.y1, cor[i * 2 + 1]);
+            }
+            hits.push_back(h);
+            lastName.clear();
+        }
+    }
+    return hits;
 }
 
 // Dark theme, applied to the whole application.
@@ -1185,9 +1356,15 @@ void MainWindow::showObject(const Object& o) {
         }
         // Content tab: resolve the page's /Contents stream(s), concatenate the
         // decoded operators and show them here so a /Page double-click jumps
-        // straight to the content stream without hunting for the ref.
+        // straight to the content stream without hunting for the ref. Any
+        // `/Name Do` operators are also picked up: the region each one paints
+        // over is drawn on the page diagram as a box labelled with the XObject
+        // name, and clicking the box jumps to the resolved target object.
         if (!contentsRefs.empty()) {
             std::string merged;
+            std::map<std::string, long long> xobj;
+            resolveXObjectMap(pdf_, src, xobj);
+            std::vector<PageDiagram::ContentBox> boxes;
             for (int ref : contentsRefs) {
                 for (const Object& co : pdf_.objects) {
                     if (co.id != ref) continue;
@@ -1205,9 +1382,24 @@ void MainWindow::showObject(const Object& o) {
                         dec.clear();
                     }
                     merged += mark + makePreview(dec, 65536, false);
+                    for (const ContentBoxHit& hh :
+                         scanContentBoxes(dec)) {
+                        const auto it = xobj.find(hh.name);
+                        PageDiagram::ContentBox cb;
+                        cb.x0 = hh.x0;
+                        cb.y0 = hh.y0;
+                        cb.x1 = hh.x1;
+                        cb.y1 = hh.y1;
+                        cb.objId = it == xobj.end() ? 0 : it->second;
+                        cb.label =
+                            QString("/%1").arg(QString::fromStdString(hh.name));
+                        boxes.push_back(cb);
+                    }
                     break;
                 }
             }
+            if (!boxes.empty())
+                pageDiagram_->setContentBoxes(boxes);
             if (!merged.empty()) {
                 contentView_->setPlainText(QString::fromStdString(merged));
                 previewTabs_->setTabVisible(5, true);
