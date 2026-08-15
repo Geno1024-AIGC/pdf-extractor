@@ -420,6 +420,8 @@ bool PdfFile::loadPath(const std::string& path) {
                 (endobj == std::string::npos ? dataEnd + 1 : endobj + 7);
         } else if (isDict) {
             obj.type = "dict";
+            obj.typeName = meta.type;
+            obj.subtype = meta.subtype;
             const size_t endobj = data_.find("endobj", mpos);
             skipBefore = endobj == std::string::npos ? mpos + 1 : endobj + 7;
         } else {

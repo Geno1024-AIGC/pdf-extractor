@@ -26,6 +26,13 @@ void PageDiagram::setPageTree(int count, const std::vector<int>& kids,
     treeCount_ = count;
     kids_ = kids;
     sizeLabel_ = label;
+    // Reserve enough vertical space for the thumbnail grid so that pages
+    // don't overflow the widget (6 columns, 56px tiles + gap + label line).
+    const int rows = (count + 5) / 6;
+    const int need = rows * 56 + (rows - 1) * 8 + 34;
+    const int setH = std::min(360, std::max(90, need));
+    setMinimumHeight(setH);
+    setMaximumHeight(setH);
     update();
 }
 
@@ -65,19 +72,21 @@ void PageDiagram::paintEvent(QPaintEvent*) {
         const int rows = (treeCount_ + cols - 1) / cols;
         const int gap = 8;
         const int tileW = 46;
-        const int tileH = 64;
+        const int tileH = 56;
         const int gw = cols * tileW + (cols - 1) * gap;
         const int gh = rows * tileH + (rows - 1) * gap;
         const int gx = (width() - gw) / 2;
         int gy = (height() - gh) / 2;
-        // Leave a bit of room for the label line.
+        // Keep the label visible at the bottom.
         gy = std::max(4, gy - 6);
+        gy = std::min(gy, height() - gh - 18);
         for (int i = 0; i < treeCount_; ++i) {
             const int c = i % cols;
             const int r = i / cols;
+            const int kid = i < static_cast<int>(kids_.size()) ? kids_[i] : 0;
             paintRect(p, QRect(gx + c * (tileW + gap),
                                gy + r * (tileH + gap), tileW, tileH),
-                      QString("#%1").arg(i + 1));
+                      kid ? QString("obj %1").arg(kid) : QString("#%1").arg(i + 1));
         }
         p.setPen(QColor(0x9a, 0xa0, 0xc3));
         p.drawText(rect(), Qt::AlignHCenter | Qt::AlignBottom,
