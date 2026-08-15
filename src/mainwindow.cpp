@@ -190,9 +190,13 @@ PdfToken nextPdfToken(const std::string& s, PdfCursor& c) {
         size_t p = c + 1;
         while (p < n && depth) {
             if (s[p] == '\\') p += 2;
-            else if (s[p] == '(') ++depth;
-            else if (s[p] == ')') --depth;
-            else ++p;
+            else if (s[p] == '(') {
+                ++depth;
+                ++p;
+            } else if (s[p] == ')') {
+                --depth;
+                ++p;
+            } else ++p;
         }
         t.kind = PdfToken::String;
         t.text = s.substr(c, std::min(p, n) - c);
