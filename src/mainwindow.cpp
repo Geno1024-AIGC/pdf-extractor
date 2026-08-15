@@ -567,7 +567,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     structView_ = new QTreeWidget(this);
     structView_->setHeaderLabels({"Key", "Value"});
-    structView_->hide();
     pageDiagram_ = new PageDiagram(this);
     pageDiagram_->setMinimumHeight(90);
     pageDiagram_->setMaximumHeight(220);
