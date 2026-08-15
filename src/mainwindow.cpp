@@ -32,6 +32,7 @@
 
 #include <cstdlib>
 #include <functional>
+#include <set>
 
 #include "cli.h"
 #include "extractor.h"
@@ -143,7 +144,9 @@ PdfToken nextPdfToken(const std::string& s, PdfCursor& c) {
     const char ch = s[c];
     if (ch == '/') {
         size_t p = c + 1;
-        while (p < n && s[p] > ' ' && s[p] != '/' && s[p] != '(' && s[p] != ')')
+        while (p < n && s[p] > ' ' &&
+               s[p] != '/' && s[p] != '(' && s[p] != ')' &&
+               s[p] != '[' && s[p] != ']' && s[p] != '<' && s[p] != '>')
             ++p;
         t.kind = PdfToken::Name;
         t.text = s.substr(c + 1, p - c - 1);
@@ -360,6 +363,20 @@ void buildPdfValue(const std::string& s, PdfCursor& c, QTreeWidgetItem* parent,
             addItem(key, val);
             ++idx;
         }
+        // Compact inline summary on the array node ("[0 0 400 600]").
+        QString summary = "[";
+        for (int i = 0; i < parent->childCount(); ++i) {
+            const QString part = parent->child(i)->text(1);
+            if (summary.size() + part.size() > 72) {
+                summary += " …";
+                break;
+            }
+            if (i) summary += " ";
+            summary += part;
+        }
+        summary += "]";
+        if (!parent->childCount()) summary = "[]";
+        parent->setText(1, summary);
         return;
     }
 }
@@ -900,10 +917,14 @@ void MainWindow::showObject(const Object& o) {
                                            QString("object %1 — click to jump")
                                                .arg(id));
                         });
-        // Detect /Type /Page for the diagram. Scan past any "N G obj"
-        // header tokens to the first dict, then read key/value pairs.
+        // Detect /Type /Page and /Type /Pages for the diagram. Scan past any
+        // "N G obj" header tokens to the first dict, collect /Kids, then walk
+        // the /Parent chain so /Page inherits /MediaBox and /Rotate.
         PdfCursor c = 0;
-        bool isPage = false;
+        std::string type;
+        int kidsRef[3] = {0, 0, 0};
+        int kidsCount = 0;
+        long long parentRef = 0;
         double mb[4] = {0, 0, 612, 792};
         int rotate = 0;
         while (c < src.size()) {
@@ -918,16 +939,20 @@ void MainWindow::showObject(const Object& o) {
                 break;
             c = t.end;
             if (t.kind != PdfToken::Name) continue;
-            const std::string key = t.text;
-            if (key == "Type") {
+            const std::string key2 = t.text;
+            if (key2 == "Type") {
                 PdfToken v = nextPdfToken(src, c);
                 c = v.end;
-                if (v.kind == PdfToken::Name && v.text == "Page") isPage = true;
-            } else if (key == "Rotate") {
+                if (v.kind == PdfToken::Name) type = v.text;
+            } else if (key2 == "Rotate") {
                 PdfToken v = nextPdfToken(src, c);
                 c = v.end;
                 try { rotate = std::stoi(v.text); } catch (...) { }
-            } else if (key == "MediaBox") {
+            } else if (key2 == "Parent") {
+                PdfToken v = nextPdfToken(src, c);
+                c = v.end;
+                if (v.kind == PdfToken::Ref) parentRef = v.refId;
+            } else if (key2 == "MediaBox") {
                 PdfToken v = nextPdfToken(src, c);
                 c = v.end;
                 if (v.kind != PdfToken::ArrayOpen) continue;
@@ -941,11 +966,104 @@ void MainWindow::showObject(const Object& o) {
                     try { mb[vals] = std::stod(e.text); } catch (...) { mb[vals] = 0; }
                     ++vals;
                 }
+            } else if (key2 == "Kids") {
+                PdfToken v = nextPdfToken(src, c);
+                c = v.end;
+                if (v.kind != PdfToken::ArrayOpen) continue;
+                while (kidsCount < 3) {
+                    PdfToken e = nextPdfToken(src, c);
+                    c = e.end;
+                    if (e.kind == PdfToken::ArrayClose ||
+                        e.kind == PdfToken::End) break;
+                    if (e.kind == PdfToken::Ref)
+                        kidsRef[kidsCount++] = static_cast<int>(e.refId);
+                }
+            }
+        }
+        bool isPage = type == "Page";
+        bool isPages = type == "Pages";
+        if (isPage && parentRef > 0) {
+            // /Page usually omits MediaBox/Rotate; they live on the /Pages
+            // ancestor. Follow the chain to inherit.
+            std::set<long long> seen;
+            long long up = parentRef;
+            while (up > 0 && seen.insert(up).second) {
+                bool found = false;
+                for (const Object& po : pdf_.objects) {
+                    if (po.id != up) continue;
+                    found = true;
+                    std::string psrc;
+                    if (po.isStream || !pdf_.readObjectSource(po, psrc))
+                        break;
+                    PdfCursor q = 0;
+                    double pband[2] = {0, 0};
+                    int prot = 0;
+                    long long pparent = 0;
+                    bool gotBox = false;
+                    while (q < psrc.size()) {
+                        PdfToken u = nextPdfToken(psrc, q);
+                        if (u.kind == PdfToken::DictOpen) break;
+                        if (u.kind == PdfToken::End) break;
+                        q = u.end;
+                    }
+                    while (q < psrc.size()) {
+                        PdfToken u = nextPdfToken(psrc, q);
+                        if (u.kind == PdfToken::End ||
+                            u.kind == PdfToken::DictClose)
+                            break;
+                        q = u.end;
+                        if (u.kind != PdfToken::Name) continue;
+                        const std::string pk = u.text;
+                        if (pk == "Rotate") {
+                            PdfToken v = nextPdfToken(psrc, q);
+                            q = v.end;
+                            try { prot = std::stoi(v.text); } catch (...) { }
+                        } else if (pk == "Parent") {
+                            PdfToken v = nextPdfToken(psrc, q);
+                            q = v.end;
+                            if (v.kind == PdfToken::Ref) pparent = v.refId;
+                        } else if (pk == "MediaBox") {
+                            PdfToken v = nextPdfToken(psrc, q);
+                            q = v.end;
+                            if (v.kind != PdfToken::ArrayOpen) continue;
+                            int vals = 0;
+                            while (vals < 2) {
+                                PdfToken e = nextPdfToken(psrc, q);
+                                q = e.end;
+                                if (e.kind == PdfToken::ArrayClose ||
+                                    e.kind == PdfToken::End)
+                                    break;
+                                try { pband[vals] = std::stod(e.text); }
+                                catch (...) { pband[vals] = 0; }
+                                ++vals;
+                            }
+                            gotBox = true;
+                        }
+                    }
+                    if (gotBox) {
+                        mb[0] = 0; mb[1] = 0;
+                        mb[2] = pband[0]; mb[3] = pband[1];
+                        if (rotate == 0) rotate = prot;
+                        break;
+                    }
+                    up = pparent;
+                    break;
+                }
+                if (!found) break;
             }
         }
         if (isPage) {
             pageDiagram_->setBox(mb[2] - mb[0], mb[3] - mb[1], rotate,
                                  QString("Page %1  pt").arg(o.id));
+            pageDiagram_->show();
+        } else if (isPages) {
+            int total = 0;
+            for (const Object& po : pdf_.objects) {
+                if (po.typeName == "Pages") ++total;
+            }
+            if (total < kidsCount) total = kidsCount;
+            pageDiagram_->setPageTree(total, std::vector<int>(),
+                                     QString("Pages tree  obj %1").arg(o.id));
             pageDiagram_->show();
         }
     }

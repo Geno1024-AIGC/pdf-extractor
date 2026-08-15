@@ -16,23 +16,80 @@ void PageDiagram::setBox(double w, double h, int rotate,
     h_ = h;
     rotate_ = rotate;
     sizeLabel_ = sizeLabel;
+    treeMode_ = false;
+    update();
+}
+
+void PageDiagram::setPageTree(int count, const std::vector<int>& kids,
+                              const QString& label) {
+    treeMode_ = true;
+    treeCount_ = count;
+    kids_ = kids;
+    sizeLabel_ = label;
     update();
 }
 
 void PageDiagram::clearDiagram() {
     sizeLabel_.clear();
+    treeMode_ = false;
     update();
+}
+
+void PageDiagram::paintRect(QPainter& p, const QRect& r, const QString& text) {
+    p.setPen(QPen(QColor(0x9a, 0xa0, 0xc3), 1));
+    p.setBrush(QColor(0x3a, 0x3d, 0x55));
+    p.drawRect(r);
+    p.setPen(QColor(0x9a, 0xa0, 0xc3));
+    QFont f = p.font();
+    f.setPixelSize(10);
+    p.setFont(f);
+    p.drawText(r, Qt::AlignCenter, text);
 }
 
 void PageDiagram::paintEvent(QPaintEvent*) {
     QPainter p(this);
     p.fillRect(rect(), QColor(0x2d, 0x2f, 0x43));
-    if (sizeLabel_.isEmpty() || w_ <= 0 || h_ <= 0) {
+    if (sizeLabel_.isEmpty()) {
         p.setPen(QColor(0x6f, 0x72, 0x8f));
-        p.drawText(rect(), Qt::AlignCenter, "Select a /Type /Page object");
+        p.drawText(rect(), Qt::AlignCenter,
+                   "Select a /Type /Page or /Type /Pages object");
         return;
     }
     const int margin = 24;
+    QFont small = p.font();
+    small.setPixelSize(12);
+    p.setFont(small);
+    if (treeMode_) {
+        // Draw a grid of thumbnail pages for a /Pages tree node.
+        const int cols = 6;
+        const int rows = (treeCount_ + cols - 1) / cols;
+        const int gap = 8;
+        const int tileW = 46;
+        const int tileH = 64;
+        const int gw = cols * tileW + (cols - 1) * gap;
+        const int gh = rows * tileH + (rows - 1) * gap;
+        const int gx = (width() - gw) / 2;
+        int gy = (height() - gh) / 2;
+        // Leave a bit of room for the label line.
+        gy = std::max(4, gy - 6);
+        for (int i = 0; i < treeCount_; ++i) {
+            const int c = i % cols;
+            const int r = i / cols;
+            paintRect(p, QRect(gx + c * (tileW + gap),
+                               gy + r * (tileH + gap), tileW, tileH),
+                      QString("#%1").arg(i + 1));
+        }
+        p.setPen(QColor(0x9a, 0xa0, 0xc3));
+        p.drawText(rect(), Qt::AlignHCenter | Qt::AlignBottom,
+                   sizeLabel_ + QString("  %1 pages").arg(treeCount_));
+        return;
+    }
+    if (w_ <= 0 || h_ <= 0) {
+        p.setPen(QColor(0x6f, 0x72, 0x8f));
+        p.drawText(rect(), Qt::AlignCenter,
+                   "Select a /Type /Page or /Type /Pages object");
+        return;
+    }
     const double scale = std::min(
         static_cast<double>(width() - margin * 2) / w_,
         static_cast<double>(height() - margin * 2) / h_);
@@ -44,9 +101,6 @@ void PageDiagram::paintEvent(QPaintEvent*) {
     p.setBrush(QColor(0x3a, 0x3d, 0x55));
     p.drawRect(px, py, pw, ph);
     p.setPen(QColor(0x9a, 0xa0, 0xc3));
-    QFont f = p.font();
-    f.setPixelSize(12);
-    p.setFont(f);
     p.drawText(QRect(px, py, pw, 18), Qt::AlignCenter, sizeLabel_);
     p.drawText(px + 6, py + ph - 4,
                QString("w=%1  h=%2  rot=%3")
