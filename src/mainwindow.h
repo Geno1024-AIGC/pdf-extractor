@@ -56,6 +56,7 @@ private:
     QTableWidget* table_;
     CodeEditor* preview_;
     CodeEditor* hexView_;
+    CodeEditor* contentView_;
     CodeEditor* info_;
     QLabel* imageLabel_;
     QScrollArea* imageScroll_;

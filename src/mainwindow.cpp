@@ -636,6 +636,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     preview_ = new CodeEditor(this);
     hexView_ = new CodeEditor(this);
+    contentView_ = new CodeEditor(this);
 
     imageLabel_ = new QLabel(this);
     imageLabel_->setAlignment(Qt::AlignCenter);
@@ -667,6 +668,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     previewTabs_->addTab(preview_, "Text");
     previewTabs_->addTab(hexView_, "Hex");
     previewTabs_->addTab(imageScroll_, "Image");
+    previewTabs_->addTab(contentView_, "Content");
     previewTabs_->setTabVisible(0, false);
     previewTabs_->setTabEnabled(0, false);
     previewTabs_->setCurrentIndex(1);
@@ -749,6 +751,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     preview_->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(preview_, &QWidget::customContextMenuRequested, this,
             &MainWindow::showPreviewMenu);
+    contentView_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(contentView_, &QWidget::customContextMenuRequested, this,
+            &MainWindow::showPreviewMenu);
     imageLabel_->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(imageLabel_, &QWidget::customContextMenuRequested, this,
             &MainWindow::showImageMenu);
@@ -768,6 +773,10 @@ void MainWindow::applyStyle() {
                                         : QColor(0xe8, 0xea, 0xf2),
                                   dark_ ? QColor(0x6f, 0x72, 0x8f)
                                         : QColor(0x5a, 0x5e, 0x72));
+    contentView_->setLineNumberColors(dark_ ? QColor(0x2d, 0x2f, 0x43)
+                                            : QColor(0xe8, 0xea, 0xf2),
+                                      dark_ ? QColor(0x6f, 0x72, 0x8f)
+                                            : QColor(0x5a, 0x5e, 0x72));
     info_->setLineNumberColors(dark_ ? QColor(0x2d, 0x2f, 0x43)
                                      : QColor(0xe8, 0xea, 0xf2),
                                dark_ ? QColor(0x6f, 0x72, 0x8f)
@@ -938,8 +947,11 @@ void MainWindow::showObject(const Object& o) {
 
     // Text tab: decoded stream (text streams) or raw object source (others).
     preview_->clear();
+    contentView_->clear();
     previewTabs_->setTabEnabled(4, false);
     previewTabs_->setTabVisible(4, false);
+    previewTabs_->setTabEnabled(5, false);
+    previewTabs_->setTabVisible(5, false);
 
     if (o.isStream) {
         std::string decoded;
@@ -1003,6 +1015,7 @@ void MainWindow::showObject(const Object& o) {
         const auto dm = parseTopDict(src);
         std::string type;
         std::vector<int> kids;
+        std::vector<int> contentsRefs;
         long long parentRef = 0;
         int countDir = -1;       // /Count of the Pages node, if present
         double mb[4] = {0, 0, 612, 792};
@@ -1044,6 +1057,10 @@ void MainWindow::showObject(const Object& o) {
                 for (const PdfToken& v : val)
                     if (v.kind == PdfToken::Ref)
                         kids.push_back(static_cast<int>(v.refId));
+            } else if (key2 == "Contents") {
+                for (const PdfToken& v : val)
+                    if (v.kind == PdfToken::Ref)
+                        contentsRefs.push_back(static_cast<int>(v.refId));
             }
         }
         bool isPage = type == "Page";
@@ -1165,6 +1182,37 @@ void MainWindow::showObject(const Object& o) {
             previewTabs_->setTabVisible(0, true);
             previewTabs_->setTabEnabled(0, true);
             previewTabs_->setCurrentIndex(0);
+        }
+        // Content tab: resolve the page's /Contents stream(s), concatenate the
+        // decoded operators and show them here so a /Page double-click jumps
+        // straight to the content stream without hunting for the ref.
+        if (!contentsRefs.empty()) {
+            std::string merged;
+            for (int ref : contentsRefs) {
+                for (const Object& co : pdf_.objects) {
+                    if (co.id != ref) continue;
+                    std::string dec;
+                    std::string mark;
+                    if (pdf_.readStreamDecoded(co, dec)) {
+                        mark = "\n--- obj " + std::to_string(ref) +
+                               " (decoded) ---\n";
+                    } else if (pdf_.readStream(co, dec)) {
+                        mark = "\n--- obj " + std::to_string(ref) +
+                               " (raw, decode failed) ---\n";
+                    } else {
+                        mark = "\n--- obj " + std::to_string(ref) +
+                               " (no stream data) ---\n";
+                        dec.clear();
+                    }
+                    merged += mark + makePreview(dec, 65536, false);
+                    break;
+                }
+            }
+            if (!merged.empty()) {
+                contentView_->setPlainText(QString::fromStdString(merged));
+                previewTabs_->setTabVisible(5, true);
+                previewTabs_->setTabEnabled(5, true);
+            }
         }
     }
     previewTabs_->setTabEnabled(1, true);
