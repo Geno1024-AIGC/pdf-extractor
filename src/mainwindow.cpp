@@ -14,6 +14,9 @@
 #include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
+#include <QPainter>
+#include <QPainterPath>
+#include <QPen>
 #include <QPlainTextEdit>
 #include <QPoint>
 #include <QPixmap>
@@ -24,10 +27,15 @@
 #include <QTableWidgetItem>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
+#include <QVariant>
 #include <QVBoxLayout>
+
+#include <cstdlib>
+#include <functional>
 
 #include "cli.h"
 #include "extractor.h"
+#include "pagediagram.h"
 
 namespace pdfx {
 
@@ -82,16 +90,12 @@ QImage renderObjectImage(const PdfFile& pdf, const Object& o) {
                   nullptr);
 }
 
-// Build a hex dump of `bytes`, capped at `maxBytes`.
+// Build a hex dump of `bytes`, capped at `maxBytes`. Pure byte stream, no
+// offset column so the gutter line numbers stay the only frame of reference.
 QString hexDump(const std::string& bytes, size_t maxBytes) {
     QString out;
     size_t shown = 0;
     for (unsigned char c : bytes) {
-        if (shown == 0) {
-            char line[16];
-            std::snprintf(line, sizeof(line), "%04zx: ", shown);
-            out += QString::fromLatin1(line);
-        }
         char h[4];
         std::snprintf(h, sizeof(h), "%02x ", c);
         out += QString::fromLatin1(h);
@@ -103,6 +107,278 @@ QString hexDump(const std::string& bytes, size_t maxBytes) {
     }
     if (out.isEmpty()) out = "(empty)";
     return out;
+}
+
+// --- Minimal PDF dict/array scanner for the structure view ------------------
+// Tokenizes an object's source into a QTreeWidget tree. Recognises names,
+// numbers, dicts, arrays, strings, booleans and "N G R" references. Coarse
+// enough to be tolerant of the parser's sloppier object boundaries.
+struct PdfToken {
+    size_t end = 0;  // scan position after the token
+    enum Kind { Name, Number, String, Boolean, Ref, DictOpen, DictClose,
+                ArrayOpen, ArrayClose, Keyword, Other, End } kind = End;
+    std::string text;   // name without '/' or raw text
+    long long refId = 0;
+};
+// Caller parses at least the object body; scan of tokens is pulled through
+// this cursor so nested structures can advance it.
+using PdfCursor = size_t;
+
+PdfToken nextPdfToken(const std::string& s, PdfCursor& c) {
+    PdfToken t;
+    const size_t n = s.size();
+    // whitespace and comments
+    while (c < n && (s[c] <= ' ' || s[c] == '%')) {
+        if (s[c] == '%') {
+            while (c < n && s[c] != '\n' && s[c] != '\r') ++c;
+        } else {
+            ++c;
+        }
+    }
+    if (c >= n) {
+        t.kind = PdfToken::End;
+        t.end = c;
+        return t;
+    }
+    const char ch = s[c];
+    if (ch == '/') {
+        size_t p = c + 1;
+        while (p < n && s[p] > ' ' && s[p] != '/' && s[p] != '(' && s[p] != ')')
+            ++p;
+        t.kind = PdfToken::Name;
+        t.text = s.substr(c + 1, p - c - 1);
+        t.end = p;
+        return t;
+    }
+    if (ch == '<') {
+        if (c + 1 < n && s[c + 1] == '<') {
+            t.kind = PdfToken::DictOpen;
+            t.end = c + 2;
+        } else {
+            // hex string <...>
+            size_t p = s.find('>', c + 1);
+            t.kind = PdfToken::String;
+            t.text = "hex<" +
+                     (p == std::string::npos
+                          ? s.substr(c + 1)
+                          : s.substr(c + 1, p - c - 1)) + ">";
+            t.end = p == std::string::npos ? n : p + 1;
+        }
+        return t;
+    }
+    if (ch == '>') {
+        const bool close = c + 1 < n && s[c + 1] == '>';
+        t.kind = close ? PdfToken::DictClose : PdfToken::Other;
+        t.end = c + (close ? 2 : 1);
+        return t;
+    }
+    if (ch == '[') {
+        t.kind = PdfToken::ArrayOpen;
+        t.end = c + 1;
+        return t;
+    }
+    if (ch == ']') {
+        t.kind = PdfToken::ArrayClose;
+        t.end = c + 1;
+        return t;
+    }
+    if (ch == '(') {
+        size_t depth = 1;
+        size_t p = c + 1;
+        while (p < n && depth) {
+            if (s[p] == '\\') p += 2;
+            else if (s[p] == '(') ++depth;
+            else if (s[p] == ')') --depth;
+            else ++p;
+        }
+        t.kind = PdfToken::String;
+        t.text = s.substr(c, std::min(p, n) - c);
+        t.end = std::min(p, n);
+        return t;
+    }
+    if (ch == '+' || ch == '-' || (ch >= '0' && ch <= '9') ||
+        ch == '.' ) {
+        size_t p = c;
+        // collect "N G R" as a reference if followed by two ints + R
+        auto isInt = [&](size_t pos, size_t& after) {
+            while (pos < n && s[pos] == ' ') ++pos;
+            if (pos >= n || !(s[pos] == '-' || (s[pos] >= '0' && s[pos] <= '9')))
+                return false;
+            after = pos + 1;
+            while (after < n && (s[after] == '-' ||
+                   (s[after] >= '0' && s[after] <= '9')))
+                ++after;
+            return true;
+        };
+        size_t numEnd = p;
+        while (numEnd < n && (s[numEnd] == '+' || s[numEnd] == '-' ||
+               s[numEnd] == '.' || (s[numEnd] >= '0' && s[numEnd] <= '9')))
+            ++numEnd;
+        const std::string first = s.substr(p, numEnd - p);
+        if (!first.empty() && first.find('.') == std::string::npos) {
+            size_t a1 = numEnd, a2 = 0;
+            if (isInt(a1, a2)) {
+                size_t gEnd = a2;
+                while (gEnd < n && s[gEnd] == ' ') ++gEnd;
+                size_t rEnd = gEnd;
+                while (rEnd < n && (s[rEnd] == '-' ||
+                       (s[rEnd] >= '0' && s[rEnd] <= '9'))) ++rEnd;
+                if (rEnd < n && s[rEnd] == 'R') {
+                    long long id = 0;
+                    try { id = std::stoll(first); } catch (...) { }
+                    t.kind = PdfToken::Ref;
+                    t.refId = id;
+                    t.text = first + " 0 R";
+                    t.end = rEnd + 1;
+                    return t;
+                }
+            }
+        }
+        t.kind = PdfToken::Number;
+        t.text = first;
+        t.end = numEnd;
+        return t;
+    }
+    if (ch >= 'a' && ch <= 'z') {
+        size_t p = c;
+        while (p < n && ((s[p] >= 'a' && s[p] <= 'z') ||
+               (s[p] >= 'A' && s[p] <= 'Z'))) ++p;
+        t.kind = PdfToken::Keyword;
+        t.text = s.substr(c, p - c);
+        t.end = p;
+        return t;
+    }
+    t.kind = PdfToken::Other;
+    t.end = c + 1;
+    return t;
+}
+
+// Populate `parent` with the structure of a dict/array starting at `c`.
+// Returns the cursor after the consumed structure. `onRef` is invoked for
+// every "N 0 R" reference found (id and the created item).
+using RefCallback = std::function<void(long long, QTreeWidgetItem*)>;
+
+void buildPdfValue(const std::string& s, PdfCursor& c, QTreeWidgetItem* parent,
+                   const RefCallback& onRef) {
+    auto addItem = [&](const QString& key, const QString& value) {
+        auto* it = new QTreeWidgetItem(parent);
+        it->setText(0, key);
+        it->setText(1, value);
+        parent->addChild(it);
+        return it;
+    };
+    PdfToken t = nextPdfToken(s, c);
+    c = t.end;
+    if (t.kind == PdfToken::DictOpen) {
+        while (true) {
+            PdfToken k = nextPdfToken(s, c);
+            c = k.end;
+            if (k.kind == PdfToken::DictClose || k.kind == PdfToken::End) break;
+            if (k.kind != PdfToken::Name) continue;  // tolerate junk
+            // value
+            PdfToken v = nextPdfToken(s, c);
+            c = v.end;
+            if (v.kind == PdfToken::DictOpen) {
+                auto* sub = addItem("/" + QString::fromStdString(k.text), "dict");
+                c = v.end - 2;  // rewind onto "<<"
+                buildPdfValue(s, c, sub, onRef);
+                continue;
+            }
+            if (v.kind == PdfToken::ArrayOpen) {
+                auto* sub = addItem("/" + QString::fromStdString(k.text),
+                                    "array");
+                c = v.end - 1;  // rewind onto "["
+                buildPdfValue(s, c, sub, onRef);
+                continue;
+            }
+            if (v.kind == PdfToken::Ref) {
+                auto* it =
+                    addItem("/" + QString::fromStdString(k.text),
+                            QString("%1 0 R").arg(v.refId));
+                onRef(v.refId, it);
+                continue;
+            }
+            QString val;
+            switch (v.kind) {
+                case PdfToken::Name:
+                    val = "/" + QString::fromStdString(v.text);
+                    break;
+                case PdfToken::Number:
+                    val = QString::fromStdString(v.text);
+                    break;
+                case PdfToken::String:
+                    val = QString::fromStdString(v.text);
+                    break;
+                case PdfToken::Keyword:
+                    val = QString::fromStdString(v.text);
+                    break;
+                default:
+                    val = "?";
+                    break;
+            }
+            addItem("/" + QString::fromStdString(k.text), val);
+        }
+        return;
+    }
+    if (t.kind == PdfToken::ArrayOpen) {
+        int idx = 0;
+        while (true) {
+            PdfToken k = nextPdfToken(s, c);
+            c = k.end;
+            if (k.kind == PdfToken::ArrayClose || k.kind == PdfToken::End)
+                break;
+            const QString key = QString::number(idx);
+            if (k.kind == PdfToken::DictOpen) {
+                auto* sub = addItem(key, "dict");
+                c = k.end - 2;  // rewind onto "<<"
+                buildPdfValue(s, c, sub, onRef);
+                ++idx;
+                continue;
+            }
+            if (k.kind == PdfToken::ArrayOpen) {
+                auto* sub = addItem(key, "array");
+                c = k.end - 1;  // rewind onto "["
+                buildPdfValue(s, c, sub, onRef);
+                ++idx;
+                continue;
+            }
+            if (k.kind == PdfToken::Ref) {
+                auto* it =
+                    addItem(key, QString("%1 0 R").arg(k.refId));
+                onRef(k.refId, it);
+                ++idx;
+                continue;
+            }
+            QString val;
+            switch (k.kind) {
+                case PdfToken::Name: val = "/" + QString::fromStdString(k.text); break;
+                case PdfToken::Number: val = QString::fromStdString(k.text); break;
+                case PdfToken::String: val = QString::fromStdString(k.text); break;
+                case PdfToken::Keyword: val = QString::fromStdString(k.text); break;
+                default: val = "?"; break;
+            }
+            addItem(key, val);
+            ++idx;
+        }
+        return;
+    }
+}
+
+// Find the first "<<" or "[" in object source and build its tree.
+void buildObjectTree(const std::string& src, QTreeWidget* tree,
+                     const RefCallback& onRef) {
+    tree->clear();
+    // locate start of dict or array body
+    PdfCursor c = 0;
+    while (c < src.size()) {
+        PdfToken t = nextPdfToken(src, c);
+        if (t.kind == PdfToken::DictOpen || t.kind == PdfToken::ArrayOpen) break;
+        c = t.end;
+    }
+    auto* root = new QTreeWidgetItem(tree, QStringList{"Root"});
+    tree->addTopLevelItem(root);
+    buildPdfValue(src, c, root, onRef);
+    root->setExpanded(true);
 }
 
 // Dark theme, applied to the whole application.
@@ -292,15 +568,28 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     structView_ = new QTreeWidget(this);
     structView_->setHeaderLabels({"Key", "Value"});
     structView_->hide();
+    pageDiagram_ = new PageDiagram(this);
+    pageDiagram_->setMinimumHeight(90);
+    pageDiagram_->setMaximumHeight(220);
+    pageDiagram_->hide();
+    auto* structBox = new QWidget(this);
+    auto* structLay = new QVBoxLayout(structBox);
+    structLay->setContentsMargins(0, 0, 0, 0);
+    structLay->addWidget(pageDiagram_);
+    structLay->addWidget(structView_);
 
     previewTabs_ = new QTabWidget(this);
     previewTabs_->setTabPosition(QTabWidget::South);
+    previewTabs_->addTab(structBox, "Structure");
     previewTabs_->addTab(preview_, "Text");
     previewTabs_->addTab(hexView_, "Hex");
     previewTabs_->addTab(imageScroll_, "Image");
-    previewTabs_->addTab(structView_, "Structure");
-    previewTabs_->setTabEnabled(2, false);
+    previewTabs_->setTabEnabled(0, false);
+    previewTabs_->setTabEnabled(1, true);
+    previewTabs_->setTabEnabled(2, true);
     previewTabs_->setTabEnabled(3, false);
+    previewTabs_->setTabVisible(3, false);
+    previewTabs_->setCurrentIndex(1);
 
     info_ = new CodeEditor(this);
 
@@ -357,6 +646,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             &MainWindow::onRowChanged);
     connect(table_, &QTableWidget::itemActivated,
             [this](QTableWidgetItem*) { onRowChanged(); });
+    connect(structView_, &QTreeWidget::itemActivated, this,
+            [this](QTreeWidgetItem* it, int) { gotoRefItem(it); });
 
     table_->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(table_, &QWidget::customContextMenuRequested, this,
@@ -553,10 +844,8 @@ void MainWindow::showObject(const Object& o) {
 
     // Text tab: decoded stream (text streams) or raw object source (others).
     preview_->clear();
-    previewTabs_->setTabEnabled(2, false);
     previewTabs_->setTabEnabled(3, false);
     previewTabs_->setTabVisible(3, false);
-    previewTabs_->setTabVisible(2, false);
 
     if (o.isStream) {
         std::string decoded;
@@ -578,8 +867,8 @@ void MainWindow::showObject(const Object& o) {
         if (o.subtype == "Image") {
             QImage img = renderObjectImage(pdf_, o);
             if (!img.isNull()) {
-                previewTabs_->setTabVisible(2, true);
-                previewTabs_->setTabEnabled(2, true);
+                previewTabs_->setTabVisible(3, true);
+                previewTabs_->setTabEnabled(3, true);
                 previewTabs_->setCurrentWidget(imageScroll_);
                 imagePixmap_ = QPixmap::fromImage(img);
                 updateImageLabel();
@@ -594,42 +883,90 @@ void MainWindow::showObject(const Object& o) {
                              .arg(QString::fromStdString(o.type)));
     }
 
-    // Structure tab mirrors the source syntax tree for dict/array sources.
+    // Structure tab: parse the object source into a key/value tree with
+    // clickable references, plus a page diagram for /Type /Page objects.
     structView_->clear();
-    QString type = QString::fromStdString(o.type);
-    QString subtype = QString::fromStdString(o.subtype);
-    auto insertPair = [&](const QString& k, const QString& v) {
-        auto* it = new QTreeWidgetItem(structView_);
-        it->setText(0, k);
-        it->setText(1, v);
-        structView_->addTopLevelItem(it);
-    };
-    if (o.isStream) {
-        insertPair("Object", QString::number(o.id));
-        insertPair("Type", "stream");
-        if (type != "stream") insertPair("Declared /Type", type);
-        if (!subtype.isEmpty()) insertPair("Subtype", subtype);
-        insertPair("Length", QString::number(o.rawLength));
-        insertPair("Filters", filterText(o));
-        if (o.width > 0) insertPair("Width", QString::number(o.width));
-        if (o.height > 0) insertPair("Height", QString::number(o.height));
-        if (o.bitsPerComponent > 0)
-            insertPair("BitsPerComponent", QString::number(o.bitsPerComponent));
-        if (!o.colorspace.empty())
-            insertPair("ColorSpace", QString::fromStdString(o.colorspace));
-        insertPair("Predictor", QString::number(o.predictor));
-        previewTabs_->setTabVisible(3, true);
-        previewTabs_->setTabEnabled(3, true);
-    } else {
-        // Non-stream object: show the scalar value (name/number/string/dict).
-        insertPair("Object", QString::number(o.id));
-        insertPair("Type", type);
-        previewTabs_->setTabVisible(3, true);
-        previewTabs_->setTabEnabled(3, true);
-        if (haveSource && !src.empty()) {
-            insertPair("Source", QString::fromStdString(src).trimmed());
+    pageDiagram_->hide();
+    if (haveSource && !src.empty()) {
+        buildObjectTree(src, structView_,
+                        [this](long long id, QTreeWidgetItem* it) {
+                            it->setData(0, Qt::UserRole,
+                                        QVariant(static_cast<qulonglong>(id)));
+                            QFont f = it->font(1);
+                            f.setUnderline(true);
+                            it->setFont(1, f);
+                            if (dark_) it->setForeground(1, QColor(0x7c, 0x9c, 0xff));
+                            else it->setForeground(1, QColor(0x2a, 0x50, 0xe0));
+                            it->setToolTip(1,
+                                           QString("object %1 — click to jump")
+                                               .arg(id));
+                        });
+        // Detect /Type /Page for the diagram. Scan past any "N G obj"
+        // header tokens to the first dict, then read key/value pairs.
+        PdfCursor c = 0;
+        bool isPage = false;
+        double mb[4] = {0, 0, 612, 792};
+        int rotate = 0;
+        while (c < src.size()) {
+            PdfToken t = nextPdfToken(src, c);
+            if (t.kind == PdfToken::DictOpen) break;
+            if (t.kind == PdfToken::End) break;
+            c = t.end;
+        }
+        while (c < src.size()) {
+            PdfToken t = nextPdfToken(src, c);
+            if (t.kind == PdfToken::End || t.kind == PdfToken::DictClose)
+                break;
+            c = t.end;
+            if (t.kind != PdfToken::Name) continue;
+            const std::string key = t.text;
+            if (key == "Type") {
+                PdfToken v = nextPdfToken(src, c);
+                c = v.end;
+                if (v.kind == PdfToken::Name && v.text == "Page") isPage = true;
+            } else if (key == "Rotate") {
+                PdfToken v = nextPdfToken(src, c);
+                c = v.end;
+                try { rotate = std::stoi(v.text); } catch (...) { }
+            } else if (key == "MediaBox") {
+                PdfToken v = nextPdfToken(src, c);
+                c = v.end;
+                if (v.kind != PdfToken::ArrayOpen) continue;
+                int vals = 0;
+                while (vals < 4) {
+                    PdfToken e = nextPdfToken(src, c);
+                    c = e.end;
+                    if (e.kind == PdfToken::ArrayClose ||
+                        e.kind == PdfToken::End)
+                        break;
+                    try { mb[vals] = std::stod(e.text); } catch (...) { mb[vals] = 0; }
+                    ++vals;
+                }
+            }
+        }
+        if (isPage) {
+            pageDiagram_->setBox(mb[2] - mb[0], mb[3] - mb[1], rotate,
+                                 QString("Page %1  pt").arg(o.id));
+            pageDiagram_->show();
         }
     }
+    previewTabs_->setTabEnabled(0, true);
+}
+
+void MainWindow::gotoRefItem(QTreeWidgetItem* item) {
+    if (!item) return;
+    const QVariant v = item->data(0, Qt::UserRole);
+    if (!v.isValid()) return;
+    const int id = v.toInt();
+    for (int r = 0; r < table_->rowCount(); ++r) {
+        if (table_->item(r, 0) &&
+            table_->item(r, 0)->data(Qt::UserRole).toInt() == id) {
+            table_->setCurrentCell(r, 0);
+            return;
+        }
+    }
+    status_->setText("referenced object " + QString::number(id) +
+                     " not found in scan");
 }
 
 void MainWindow::updateImageLabel() {

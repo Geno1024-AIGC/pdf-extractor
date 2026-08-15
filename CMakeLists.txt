@@ -31,6 +31,8 @@ add_executable(pdfx
     src/mainwindow.h
     src/codeeditor.cpp
     src/codeeditor.h
+    src/pagediagram.cpp
+    src/pagediagram.h
 )
 
 target_include_directories(pdfx PRIVATE src)

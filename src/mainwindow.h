@@ -16,6 +16,8 @@ class QPixmap;
 class QTableWidget;
 class QTabWidget;
 class QTreeWidget;
+class QTreeWidgetItem;
+class PageDiagram;
 
 namespace pdfx {
 
@@ -49,6 +51,7 @@ private:
     void fillInfo();
     void log(const QString& text);
     void updateImageLabel();
+    void gotoRefItem(QTreeWidgetItem* item);
     QTabWidget* previewTabs_;
     QTableWidget* table_;
     CodeEditor* preview_;
@@ -57,6 +60,7 @@ private:
     QLabel* imageLabel_;
     QScrollArea* imageScroll_;
     QTreeWidget* structView_;
+    PageDiagram* pageDiagram_;
     QPlainTextEdit* console_;
     QLineEdit* command_;
     QLabel* status_;
