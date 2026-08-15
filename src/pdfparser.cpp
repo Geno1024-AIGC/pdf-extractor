@@ -165,6 +165,13 @@ struct StreamMeta {
     std::vector<std::string> filters;
     std::string type;
     std::string subtype;
+    // image fields
+    int width = 0;
+    int height = 0;
+    int bitsPerComponent = 8;
+    int components = 1;
+    int predictor = 1;
+    std::string colorspace;
 };
 
 bool parseDict(Reader& r, StreamMeta* m) {
@@ -240,6 +247,62 @@ bool parseDict(Reader& r, StreamMeta* m) {
             if (r.s[r.pos] == '/') {
                 ++r.pos;
                 m->subtype = readName(r);
+            } else {
+                skipValue(r);
+            }
+        } else if (key == "Width") {
+            long long v;
+            if (tryReadNumber(r, v)) m->width = static_cast<int>(v);
+        } else if (key == "Height") {
+            long long v;
+            if (tryReadNumber(r, v)) m->height = static_cast<int>(v);
+        } else if (key == "BitsPerComponent") {
+            long long v;
+            if (tryReadNumber(r, v)) m->bitsPerComponent = static_cast<int>(v);
+        } else if (key == "ColorSpace") {
+            if (r.s[r.pos] == '/') {
+                ++r.pos;
+                m->colorspace = readName(r);
+                int n = 1;
+                if (m->colorspace == "DeviceGray") n = 1;
+                else if (m->colorspace == "DeviceRGB") n = 3;
+                else if (m->colorspace == "DeviceCMYK") n = 4;
+                m->components = n;
+            } else {
+                skipValue(r);
+            }
+        } else if (key == "DecodeParms") {
+            // The value may be << dict >>, [ ... ], a name ref, or hex string.
+            if (r.pos + 1 < r.s.size() && r.s[r.pos] == '<' &&
+                r.s[r.pos + 1] == '<') {
+                r.pos += 2;
+                r.skipWs();
+                while (r.pos < r.s.size() && !r.starts(">>")) {
+                    r.skipWs();
+                    if (r.s[r.pos] != '/') {
+                        skipValue(r);
+                        continue;
+                    }
+                    ++r.pos;
+                    std::string k = readName(r);
+                    if (k == "Predictor") {
+                        long long v;
+                        if (tryReadNumber(r, v))
+                            m->predictor = static_cast<int>(v);
+                    } else if (k == "Colors") {
+                        long long v;
+                        if (tryReadNumber(r, v) && v > 0)
+                            m->components = static_cast<int>(v);
+                    } else if (k == "Columns") {
+                        long long v;
+                        if (tryReadNumber(r, v) && v > 0)
+                            m->width = static_cast<int>(v);
+                    } else {
+                        skipValue(r);
+                    }
+                    r.skipWs();
+                }
+                if (r.pos + 1 < r.s.size()) r.pos += 2;
             } else {
                 skipValue(r);
             }
@@ -320,6 +383,12 @@ bool PdfFile::loadPath(const std::string& path) {
             obj.filters = meta.filters;
             obj.typeName = meta.type;
             obj.subtype = meta.subtype;
+            obj.width = meta.width;
+            obj.height = meta.height;
+            obj.bitsPerComponent = meta.bitsPerComponent;
+            obj.components = meta.components;
+            obj.predictor = meta.predictor;
+            obj.colorspace = meta.colorspace;
             if (meta.lengthIndirect) {
                 obj.rawLength = -1;
                 obj.lengthRef = meta.lengthRef;
@@ -470,6 +539,116 @@ bool PdfFile::readStreamDecoded(const Object& obj, std::string& out) const {
         std::string step;
         if (!decodeFilter(*it, out.data(), out.size(), step)) return false;
         out.swap(step);
+    }
+    return true;
+}
+
+bool applyPredictor(const Object& obj, const std::string& in,
+                    std::vector<unsigned char>& out) {
+    if (obj.predictor <= 1) {
+        out.assign(in.begin(), in.end());
+        return true;
+    }
+    const int colors = obj.components;
+    const int bpc = obj.bitsPerComponent;
+    const int cols = obj.width;
+    if (colors <= 0 || bpc <= 0 || cols <= 0) return false;
+
+    // Bytes per sample-row.
+    const int bytesPerRow = (cols * colors * bpc + 7) / 8;
+    if (obj.predictor == 2) {
+        // TIFF predictor: each sample is the running sum of its row.
+        out.clear();
+        out.reserve(in.size());
+        std::vector<unsigned char> prev(colors * 2, 0);
+        for (size_t i = 0; i < in.size(); ++i) {
+            const int idx = static_cast<int>(i % colors);
+            prev[idx] = static_cast<unsigned char>(
+                (in[i] + prev[idx]) & 0xff);
+            out.push_back(prev[idx]);
+        }
+        return true;
+    }
+    if (obj.predictor < 10 || obj.predictor > 15) return false;
+    if (bpc != 8) return false;  // PNG predictors for <8bpc need bit packing
+
+    // PNG predictors: each row starts with a filter-type byte.
+    const size_t stride = static_cast<size_t>(bytesPerRow);
+    const size_t rowBytes = stride + 1;
+    if (in.size() < rowBytes) return false;
+    const size_t rows = in.size() / rowBytes;
+    if (rows != static_cast<size_t>(obj.height)) return false;
+
+    out.assign(
+        reinterpret_cast<const unsigned char*>(in.data()),
+        reinterpret_cast<const unsigned char*>(in.data()) +
+            static_cast<ptrdiff_t>(rowBytes * rows));
+    // Decode rows from top to bottom, tracking the previous (decoded) row.
+    for (size_t rown = 0; rown < rows; ++rown) {
+        const unsigned char ft = static_cast<unsigned char>(in[rown * rowBytes]);
+        const unsigned char* cur =
+            reinterpret_cast<const unsigned char*>(in.data()) + rown * rowBytes + 1;
+        unsigned char* dst = out.data() + rown * rowBytes + 1;
+        const unsigned char* pri = rown == 0
+                                       ? nullptr
+                                       : out.data() + (rown - 1) * rowBytes + 1;
+        switch (ft) {
+            case 0:
+                break;
+            case 1:
+                for (size_t i = 0; i < stride; ++i) {
+                    const unsigned char left = i >= static_cast<size_t>(colors)
+                                                   ? dst[i - static_cast<size_t>(colors)]
+                                                   : 0;
+                    dst[i] = static_cast<unsigned char>((cur[i] + left) & 0xff);
+                }
+                break;
+            case 2: {
+                if (!pri) { std::copy(cur, cur + stride, dst); break; }
+                for (size_t i = 0; i < stride; ++i) {
+                    dst[i] = static_cast<unsigned char>((cur[i] + pri[i]) & 0xff);
+                }
+                break;
+            }
+            case 3: {
+                for (size_t i = 0; i < stride; ++i) {
+                    const unsigned char left = i >= static_cast<size_t>(colors)
+                                                   ? dst[i - static_cast<size_t>(colors)]
+                                                   : 0;
+                    const unsigned char up = pri ? pri[i] : 0;
+                    const unsigned char avg = static_cast<unsigned char>(
+                        (static_cast<int>(left) + up) / 2);
+                    dst[i] = static_cast<unsigned char>((cur[i] + avg) & 0xff);
+                }
+                break;
+            }
+            case 4: {
+                for (size_t i = 0; i < stride; ++i) {
+                    unsigned char left = 0, up = 0, ul = 0;
+                    if (i >= static_cast<size_t>(colors)) {
+                        left = dst[i - static_cast<size_t>(colors)];
+                        ul = (pri && i >= static_cast<size_t>(colors))
+                                 ? pri[i - static_cast<size_t>(colors)]
+                                 : 0;
+                    }
+                    if (pri) up = pri[i];
+                    const int p = static_cast<int>(left) + up - static_cast<int>(ul);
+                    const int pa = p - static_cast<int>(left);
+                    const int pb = p - static_cast<int>(up);
+                    const int pc = p - static_cast<int>(ul);
+                    const int pav = std::abs(pa), pbv = std::abs(pb),
+                              pcv = std::abs(pc);
+                    unsigned char pred;
+                    if (pav <= pbv && pav <= pcv) pred = static_cast<unsigned char>(left);
+                    else if (pbv <= pcv) pred = static_cast<unsigned char>(up);
+                    else pred = static_cast<unsigned char>(ul);
+                    dst[i] = static_cast<unsigned char>((cur[i] + pred) & 0xff);
+                }
+                break;
+            }
+            default:
+                return false;
+        }
     }
     return true;
 }

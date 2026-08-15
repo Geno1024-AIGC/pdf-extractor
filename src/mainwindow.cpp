@@ -325,7 +325,9 @@ void MainWindow::showObject(const Object& o) {
 
     std::string decoded;
     if (pdf_.readStreamDecoded(o, decoded)) {
-        // Try rendering image streams (DCTDecode passthrough arrives as JPEG).
+        // Try rendering image streams: DCTDecode arrives as real JPEG, while
+        // FlateDecode image streams are raw samples that need predictor
+        // inversion (see applyPredictor) before a QImage can be built.
         if (o.subtype == "Image") {
             QImage img;
             if (img.loadFromData(
@@ -339,6 +341,62 @@ void MainWindow::showObject(const Object& o) {
                 imageLabel_->adjustSize();
                 return;
             }
+            std::vector<unsigned char> samples;
+            if (applyPredictor(o, decoded, samples) && o.width > 0 &&
+                o.height > 0 && o.bitsPerComponent == 8) {
+                QImage::Format fmt = QImage::Format_Invalid;
+                switch (o.components) {
+                    case 1: fmt = QImage::Format_Grayscale8; break;
+                    case 3: fmt = QImage::Format_RGB888; break;
+                    case 4: fmt = QImage::Format_RGB32; break;
+                    default: break;
+                }
+                const int stride = o.width * o.components;
+                const size_t need = static_cast<size_t>(o.height) * stride;
+                if (fmt != QImage::Format_Invalid &&
+                    samples.size() >= need) {
+                    QImage img;
+                    if (o.components == 4) {
+                        // CMYK is byte-packed as 4 samples per pixel; no
+                        // matching QImage::Format, so convert to RGB32 first.
+                        for (size_t i = 0; i + 4 <= samples.size(); i += 4) {
+                            const int c = samples[i], m = samples[i + 1];
+                            const int y = samples[i + 2], k = samples[i + 3];
+                            samples[i] = static_cast<unsigned char>(
+                                (255 - c) * (255 - k) / 255);
+                            samples[i + 1] = static_cast<unsigned char>(
+                                (255 - m) * (255 - k) / 255);
+                            samples[i + 2] = static_cast<unsigned char>(
+                                (255 - y) * (255 - k) / 255);
+                            samples[i + 3] = 255;
+                        }
+                        img = QImage(samples.data(), o.width, o.height,
+                                     stride, QImage::Format_RGB32);
+                    } else {
+                        img = QImage(samples.data(), o.width, o.height,
+                                     stride, fmt, nullptr, nullptr);
+                    }
+                    if (!img.isNull()) {
+                        previewStack_->setCurrentWidget(
+                            imageLabel_->parentWidget());
+                        imageLabel_->setPixmap(
+                            QPixmap::fromImage(img).scaled(
+                                imageLabel_->size(), Qt::KeepAspectRatio,
+                                Qt::SmoothTransformation));
+                        imageLabel_->adjustSize();
+                        return;
+                    }
+                }
+            }
+            previewStack_->setCurrentWidget(preview_);
+            preview_->setPlainText(
+                "[image: width=" + QString::number(o.width) +
+                " height=" + QString::number(o.height) +
+                " bits=" + QString::number(o.bitsPerComponent) +
+                " colorspace=" + QString::fromStdString(o.colorspace) +
+                " predictor=" + QString::number(o.predictor) +
+                "]\n" + QString::fromStdString(makePreview(decoded)));
+            return;
         }
         previewStack_->setCurrentWidget(preview_);
         preview_->setPlainText(QString::fromStdString(makePreview(decoded)));

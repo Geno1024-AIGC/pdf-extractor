@@ -19,6 +19,14 @@ struct Object {
     int lengthRef = -1;         // object number of an indirect /Length reference
     std::string subtype;        // /Subtype if present (e.g. "Image", "Font")
     std::string typeName;       // /Type if present
+
+    // Image geometry (only meaningful when subtype == "Image").
+    int width = 0;
+    int height = 0;
+    int bitsPerComponent = 8;
+    int components = 1;         // channels implied by /ColorSpace
+    int predictor = 1;          // /DecodeParms /Predictor (1 none, 2 TIFF, >=10 PNG)
+    std::string colorspace;     // /ColorSpace name (DeviceRGB, DeviceGray, ...)
 };
 
 struct XrefEntry {
@@ -62,6 +70,12 @@ private:
     void parseXrefAndTrailer();
     std::string data_;
 };
+
+// Undo a /DecodeParms predictor (TIFF Predictor 2 and PNG 10..15) so the raw
+// image sample row bytes are returned. `obj` carries the image geometry.
+// Returns false if the predictor is unsupported or the data is inconsistent.
+bool applyPredictor(const Object& obj, const std::string& in,
+                    std::vector<unsigned char>& out);
 
 }  // namespace pdfx
 
