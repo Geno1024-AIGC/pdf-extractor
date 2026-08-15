@@ -16,8 +16,8 @@ class PdfFile;
 //   0   ok
 //   1   command recognized but failed (message in output)
 //   2   quit requested
-int runCommand(PdfFile* pdf, const std::string& cmd,
-               const std::function<void(const std::string&)>& emit);
+int execCommand(PdfFile* pdf, const std::string& cmd,
+                const std::function<void(const std::string&)>& emit);
 
 struct CliOptions {
     bool gui = false;                 // force GUI

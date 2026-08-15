@@ -2,13 +2,18 @@
 #define MAINWINDOW_H
 
 #include <QMainWindow>
+#include <QString>
+
+#include "pdfparser.h"
 
 class QTableWidget;
 class QPlainTextEdit;
 class QLineEdit;
 class QLabel;
+class QPushButton;
 
 namespace pdfx {
+
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
@@ -17,15 +22,23 @@ public:
 
 private slots:
     void openPdf();
-    void extractAll();
+    void extractSelected();
     void runCommand();
+    void onRowChanged();
 
 private:
+    void fillTable();
+    void showObject(const Object& o);
+    void log(const QString& text);
+    QPushButton* openBtn_;
+    QPushButton* extractBtn_;
     QTableWidget* table_;
     QPlainTextEdit* preview_;
     QPlainTextEdit* console_;
     QLineEdit* command_;
     QLabel* status_;
+    PdfFile pdf_;
+    QString outDir_;
 };
 
 }  // namespace pdfx

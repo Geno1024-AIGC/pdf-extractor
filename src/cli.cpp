@@ -45,8 +45,8 @@ bool tryParseInt(const std::string& s, int& v) {
 
 }  // namespace
 
-int runCommand(PdfFile* pdf, const std::string& cmd,
-               const std::function<void(const std::string&)>& emit) {
+int execCommand(PdfFile* pdf, const std::string& cmd,
+                const std::function<void(const std::string&)>& emit) {
     const std::vector<std::string> args = tokenize(cmd);
     if (args.empty()) return 0;
 
@@ -178,7 +178,7 @@ int runCli(const std::vector<std::string>& args) {
             std::cerr << "load failed: " << pdf.error << "\n";
             return 1;
         }
-        runCommand(&pdf, "list", outCb);
+        execCommand(&pdf, "list", outCb);
         return 0;
     }
     if (!args.empty() && args[0] == "extract") {
@@ -198,7 +198,7 @@ int runCli(const std::vector<std::string>& args) {
             spec = "extract";
             for (size_t j = 2; j < args.size(); ++j) spec += " " + args[j];
         }
-        runCommand(&pdf, spec, outCb);
+        execCommand(&pdf, spec, outCb);
         return 0;
     }
     // bare ".pdf" argument (not a subcommand) -> open it in the GUI
