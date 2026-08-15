@@ -2,6 +2,7 @@
 
 #include <QAbstractItemView>
 #include <QDir>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHeaderView>
@@ -9,7 +10,9 @@
 #include <QImageReader>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
 #include <QPlainTextEdit>
+#include <QPoint>
 #include <QPixmap>
 #include <QPushButton>
 #include <QScrollArea>
@@ -193,6 +196,18 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             &MainWindow::onRowChanged);
     connect(table_, &QTableWidget::itemActivated,
             [this](QTableWidgetItem*) { onRowChanged(); });
+
+    table_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(table_, &QWidget::customContextMenuRequested, this,
+            &MainWindow::showTableMenu);
+    preview_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(preview_, &QWidget::customContextMenuRequested, this,
+            &MainWindow::showPreviewMenu);
+    imageLabel_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(imageLabel_, &QWidget::customContextMenuRequested, this,
+            &MainWindow::showImageMenu);
+    imageLabel_->installEventFilter(this);
+
     applyStyle();
     resize(1100, 640);
 }
@@ -314,6 +329,7 @@ void MainWindow::fillInfo() {
 }
 
 void MainWindow::showObject(const Object& o) {
+    contextObjId_ = o.id;
     if (!o.isStream) {
         previewStack_->setCurrentWidget(preview_);
         preview_->setPlainText(
@@ -333,11 +349,9 @@ void MainWindow::showObject(const Object& o) {
                     reinterpret_cast<const uchar*>(decoded.data()),
                     static_cast<int>(decoded.size()))) {
                 previewStack_->setCurrentWidget(imageScroll_);
-                imageLabel_->setPixmap(
-                    QPixmap::fromImage(img).scaled(
-                        imageLabel_->size(), Qt::KeepAspectRatio,
-                        Qt::SmoothTransformation));
-                imageLabel_->adjustSize();
+                imagePixmap_ = QPixmap::fromImage(img);
+                updateImageLabel();
+                contextObjId_ = o.id;
                 return;
             }
             std::vector<unsigned char> samples;
@@ -377,11 +391,9 @@ void MainWindow::showObject(const Object& o) {
                     }
                     if (!img.isNull()) {
                         previewStack_->setCurrentWidget(imageScroll_);
-                        imageLabel_->setPixmap(
-                            QPixmap::fromImage(img).scaled(
-                                imageLabel_->size(), Qt::KeepAspectRatio,
-                                Qt::SmoothTransformation));
-                        imageLabel_->adjustSize();
+                        imagePixmap_ = QPixmap::fromImage(img);
+                        updateImageLabel();
+                        contextObjId_ = o.id;
                         return;
                     }
                 }
@@ -411,6 +423,108 @@ void MainWindow::showObject(const Object& o) {
             preview_->setPlainText("could not read stream data");
         }
     }
+}
+
+void MainWindow::updateImageLabel() {
+    if (imagePixmap_.isNull()) return;
+    const QSize prev = imageLabel_->size();
+    const QSize want = prev.isEmpty()
+                           ? imagePixmap_.size()
+                           : imagePixmap_.size().scaled(
+                                 prev, Qt::KeepAspectRatio);
+    imageLabel_->setPixmap(
+        imagePixmap_.scaled(want, Qt::KeepAspectRatio,
+                            Qt::SmoothTransformation));
+}
+
+void MainWindow::showTableMenu(const QPoint& pos) {
+    QTableWidgetItem* item = table_->itemAt(pos);
+    if (!item) return;
+    contextObjId_ = item->data(Qt::UserRole).toInt();
+    table_->setCurrentItem(item);
+    QMenu menu(this);
+    menu.addAction("Save raw stream…", this, &MainWindow::saveContextObject);
+    menu.exec(table_->viewport()->mapToGlobal(pos));
+}
+
+void MainWindow::showPreviewMenu(const QPoint& pos) {
+    QMenu menu(this);
+    menu.addAction("Save shown text…", this, &MainWindow::savePreviewText);
+    menu.addAction("Save raw stream…", this, &MainWindow::saveContextObject);
+    menu.exec(preview_->viewport()->mapToGlobal(pos));
+}
+
+void MainWindow::showImageMenu(const QPoint& pos) {
+    QMenu menu(this);
+    menu.addAction("Save image…", this, &MainWindow::saveDisplayedImage);
+    menu.exec(imageLabel_->mapToGlobal(pos));
+}
+
+void MainWindow::saveDisplayedImage() {
+    if (imagePixmap_.isNull()) return;
+    const QString path = QFileDialog::getSaveFileName(
+        this, "Save image", outDir_ + "/image.png", "PNG image (*.png)");
+    if (path.isEmpty()) return;
+    if (imagePixmap_.save(path)) {
+        log("saved image -> " + path);
+        status_->setText("saved image");
+    }
+}
+
+void MainWindow::savePreviewText() {
+    const QString path = QFileDialog::getSaveFileName(
+        this, "Save text", outDir_ + "/preview.txt", "Text files (*.txt)");
+    if (path.isEmpty()) return;
+    QFile f(path);
+    if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        f.write(preview_->toPlainText().toUtf8());
+        log("saved text -> " + path);
+        status_->setText("saved text");
+    }
+}
+
+void MainWindow::saveContextObject() {
+    int id = contextObjId_;
+    if (id <= 0) {
+        const int row = table_->currentRow();
+        if (row >= 0 && row < table_->rowCount() &&
+            table_->item(row, 0))
+            id = table_->item(row, 0)->data(Qt::UserRole).toInt();
+    }
+    if (id <= 0) return;
+    const Object* found = nullptr;
+    for (const auto& o : pdf_.objects) {
+        if (o.id == id) {
+            found = &o;
+            break;
+        }
+    }
+    if (!found) return;
+    const QString base = "obj_" + QString::number(id)
+                             + "." + QString::fromStdString(found->subtype);
+    const QString path = QFileDialog::getSaveFileName(
+        this, "Save raw stream", outDir_ + "/" + base);
+    if (path.isEmpty()) return;
+    std::string bytes;
+    const bool ok = pdf_.readStream(*found, bytes);
+    if (!ok) {
+        status_->setText("object " + QString::number(id) + " has no raw stream");
+        return;
+    }
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        status_->setText("cannot write " + path);
+        return;
+    }
+    f.write(bytes.data(), static_cast<qint64>(bytes.size()));
+    log(QString("saved raw stream obj %1 -> %2").arg(id).arg(path));
+    status_->setText("saved obj " + QString::number(id));
+}
+
+bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
+    if (obj == imageLabel_ && event->type() == QEvent::Resize)
+        updateImageLabel();
+    return QMainWindow::eventFilter(obj, event);
 }
 
 void MainWindow::runCommand() {

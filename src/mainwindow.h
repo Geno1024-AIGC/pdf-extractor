@@ -9,11 +9,13 @@
 
 class QTableWidget;
 class QLineEdit;
-class QLineEdit;
 class QLabel;
 class QPushButton;
 class QStackedWidget;
 class QScrollArea;
+class QPixmap;
+class QContextMenuEvent;
+class QResizeEvent;
 
 namespace pdfx {
 
@@ -28,6 +30,15 @@ private slots:
     void extractSelected();
     void runCommand();
     void onRowChanged();
+    void showTableMenu(const QPoint& pos);
+    void showPreviewMenu(const QPoint& pos);
+    void showImageMenu(const QPoint& pos);
+    void saveContextObject();
+    void savePreviewText();
+    void saveDisplayedImage();
+
+protected:
+    bool eventFilter(QObject* obj, QEvent* event) override;
 
 private:
     void applyStyle();
@@ -35,6 +46,7 @@ private:
     void showObject(const Object& o);
     void fillInfo();
     void log(const QString& text);
+    void updateImageLabel();
     QPushButton* openBtn_;
     QPushButton* extractBtn_;
     QTableWidget* table_;
@@ -48,6 +60,8 @@ private:
     QLabel* status_;
     PdfFile pdf_;
     QString outDir_;
+    int contextObjId_ = -1;
+    QPixmap imagePixmap_;
 };
 
 }  // namespace pdfx
