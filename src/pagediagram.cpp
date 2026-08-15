@@ -21,6 +21,12 @@ void PageDiagram::setBox(double w, double h, int rotate,
     tiles_.clear();
     contentBoxes_.clear();
     boxRects_.clear();
+    // Give the widget a real footprint inside the scroll area; without this
+    // (non-resizable) it collapses to a tiny sliver and shows plain dark.
+    const double scale = std::min(1.0, 600.0 / h_);
+    const int dw = std::max(120, static_cast<int>(w_ * scale) + 48);
+    const int dh = std::max(90, static_cast<int>(h_ * scale) + 48);
+    setFixedSize(dw, dh);
     update();
 }
 
