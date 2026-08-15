@@ -14,17 +14,31 @@ struct Object {
     bool isStream = false;      // object is a stream object
     std::string type;           // stream / dict / array / string / number / name / ...
     std::vector<std::string> filters;  // /Filter entries (e.g. "FlateDecode")
-    int64_t rawLength = 0;      // length of raw stream bytes
+    int64_t rawLength = 0;      // length of raw stream bytes (-1 unknown)
+    int64_t streamStart = -1;   // byte offset of raw stream data
+    int lengthRef = -1;         // object number of an indirect /Length reference
     std::string subtype;        // /Subtype if present (e.g. "Image", "Font")
     std::string typeName;       // /Type if present
 };
 
-struct Document {
+class PdfFile {
+public:
     std::vector<Object> objects;
     std::string error;
-};
 
-bool parsePdf(const std::string& path, Document& doc);
+    // Load a PDF file: scan all top-level objects and classify them.
+    // Returns false (with error set) if the file is not a PDF.
+    bool load(const std::string& path);
+
+    // Raw undecoded stream bytes for a stream object.
+    bool readStream(const Object& obj, std::string& out) const;
+
+    // Decoded stream bytes (filters applied, from outermost to innermost).
+    bool readStreamDecoded(const Object& obj, std::string& out) const;
+
+private:
+    std::string data_;
+};
 
 }  // namespace pdfx
 
