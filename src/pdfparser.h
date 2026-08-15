@@ -48,6 +48,10 @@ public:
     // Returns false (with error set) if the file is not a PDF.
     bool load(const std::string& path);
 
+    // Load from a native path (Unicode-safe on Windows via wide chars).
+    // Falls back to load(path) on platforms without wide file support.
+    bool loadPath(const std::string& path);
+
     // Raw undecoded stream bytes for a stream object.
     bool readStream(const Object& obj, std::string& out) const;
 

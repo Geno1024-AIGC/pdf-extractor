@@ -9,6 +9,10 @@
 #include <regex>
 #include <sstream>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace pdfx {
 
 namespace {
@@ -248,19 +252,40 @@ bool parseDict(Reader& r, StreamMeta* m) {
 }  // namespace
 
 bool PdfFile::load(const std::string& path) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) {
+    return loadPath(path);
+}
+
+bool PdfFile::loadPath(const std::string& path) {
+    // helper to read the whole file into data_
+    auto readFile = [&](std::ifstream&& in) -> bool {
+        if (!in) {
+            error = "cannot open file";
+            return false;
+        }
+        std::ostringstream oss;
+        oss << in.rdbuf();
+        data_ = oss.str();
+        if (data_.size() < 8 || data_.compare(0, 5, "%PDF-") != 0) {
+            error = "not a PDF file";
+            return false;
+        }
+        return true;
+    };
+
+#ifdef _WIN32
+    // Windows: open with wide chars so non-ASCII paths work.
+    const int len = ::MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
+    std::wstring wpath(static_cast<size_t>(len > 0 ? len : 1), L'\0');
+    if (len <= 0) {
         error = "cannot open file";
         return false;
     }
-    std::ostringstream oss;
-    oss << in.rdbuf();
-    data_ = oss.str();
-
-    if (data_.size() < 8 || data_.compare(0, 5, "%PDF-") != 0) {
-        error = "not a PDF file";
-        return false;
-    }
+    ::MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, &wpath[0], len);
+    wpath.resize(static_cast<size_t>(len - 1));
+    if (!readFile(std::ifstream(wpath.c_str(), std::ios::binary))) return false;
+#else
+    if (!readFile(std::ifstream(path, std::ios::binary))) return false;
+#endif
 
     const std::regex objRe(R"((\d+)\s+(\d+)\s+obj(?=\s))");
     const auto begin = std::sregex_iterator(data_.begin(), data_.end(), objRe);
