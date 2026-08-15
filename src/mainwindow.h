@@ -11,6 +11,8 @@ class QPlainTextEdit;
 class QLineEdit;
 class QLabel;
 class QPushButton;
+class QStackedWidget;
+class QScrollArea;
 
 namespace pdfx {
 
@@ -29,11 +31,15 @@ private slots:
 private:
     void fillTable();
     void showObject(const Object& o);
+    void fillInfo();
     void log(const QString& text);
     QPushButton* openBtn_;
     QPushButton* extractBtn_;
     QTableWidget* table_;
     QPlainTextEdit* preview_;
+    QPlainTextEdit* info_;
+    QStackedWidget* previewStack_;
+    QLabel* imageLabel_;
     QPlainTextEdit* console_;
     QLineEdit* command_;
     QLabel* status_;

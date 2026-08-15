@@ -5,10 +5,15 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHeaderView>
+#include <QImage>
+#include <QImageReader>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
+#include <QPixmap>
 #include <QPushButton>
+#include <QScrollArea>
+#include <QStackedWidget>
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QTableWidgetItem>
@@ -50,9 +55,23 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     preview_ = new QPlainTextEdit(this);
     preview_->setReadOnly(true);
 
+    imageLabel_ = new QLabel(this);
+    imageLabel_->setAlignment(Qt::AlignCenter);
+    auto* imageScroll = new QScrollArea(this);
+    imageScroll->setWidget(imageLabel_);
+    imageScroll->setWidgetResizable(true);
+    imageLabel_->setTextInteractionFlags(Qt::NoTextInteraction);
+
+    previewStack_ = new QStackedWidget(this);
+    previewStack_->addWidget(preview_);
+    previewStack_->addWidget(imageScroll);
+
+    info_ = new QPlainTextEdit(this);
+    info_->setReadOnly(true);
+
     command_ = new QLineEdit(this);
     command_->setPlaceholderText(
-        "command: list, preview <n>, extract <n>, extractall, out <dir>");
+        "command: list, info, preview <n>, extract <n>, extractall, out <dir>");
 
     console_ = new QPlainTextEdit(this);
     console_->setReadOnly(true);
@@ -62,7 +81,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     status_->setText("ready");
 
     auto* tabs = new QTabWidget(this);
-    tabs->addTab(preview_, "Preview");
+    tabs->addTab(previewStack_, "Preview");
+    tabs->addTab(info_, "Info");
     tabs->addTab(console_, "Console");
 
     auto* cols = new QHBoxLayout;
@@ -106,6 +126,7 @@ void MainWindow::openPath(const QString& path) {
     }
     setWindowTitle("PDF Extractor - " + QFileInfo(path).fileName());
     fillTable();
+    fillInfo();
     log("opened " + path + " (" + QString::number(pdf_.objects.size()) +
         " objects)");
     status_->setText("opened " + QFileInfo(path).fileName());
@@ -166,23 +187,76 @@ void MainWindow::onRowChanged() {
     showObject(pdf_.objects[static_cast<size_t>(row)]);
 }
 
+void MainWindow::fillInfo() {
+    QString text;
+    const auto& t = pdf_.trailer;
+    text += QString("XRef table: %1\n")
+                .arg(t.hasXref ? "found" : "not found (skipped)");
+    text += QString("Trailer /Size: %1\n").arg(t.size);
+    text += QString("Trailer /Root: %1\n").arg(t.root);
+    text += QString("Trailer /Info: %1\n").arg(t.info);
+    text += QString("Trailer /Prev: %1\n").arg(t.prev);
+    text += QString("XRef entries: %1\n").arg(pdf_.xref.size());
+    for (const auto& e : pdf_.xref) {
+        text += QString("  %1 %2 %3 %4\n")
+                    .arg(e.id)
+                    .arg(e.gen)
+                    .arg(e.offset)
+                    .arg(e.free ? "free" : "live");
+    }
+    // consistency: which scanned objects are referenced in the xref?
+    int inXref = 0;
+    for (const auto& o : pdf_.objects) {
+        for (const auto& e : pdf_.xref) {
+            if (!e.free && e.id == o.id) {
+                ++inXref;
+                break;
+            }
+        }
+    }
+    text += QString("Scanned objects matched by xref: %1/%2\n")
+                .arg(inXref)
+                .arg(pdf_.objects.size());
+    info_->setPlainText(text);
+}
+
 void MainWindow::showObject(const Object& o) {
     if (!o.isStream) {
+        previewStack_->setCurrentWidget(preview_);
         preview_->setPlainText(
             "object " + QString::number(o.id) + " is not a stream (type " +
             QString::fromStdString(o.type) + ")");
         return;
     }
+
     std::string decoded;
     if (pdf_.readStreamDecoded(o, decoded)) {
+        // Try rendering image streams (DCTDecode passthrough arrives as JPEG).
+        if (o.subtype == "Image") {
+            QImage img;
+            if (img.loadFromData(
+                    reinterpret_cast<const uchar*>(decoded.data()),
+                    static_cast<int>(decoded.size()))) {
+                previewStack_->setCurrentWidget(imageLabel_->parentWidget());
+                imageLabel_->setPixmap(
+                    QPixmap::fromImage(img).scaled(
+                        imageLabel_->size(), Qt::KeepAspectRatio,
+                        Qt::SmoothTransformation));
+                imageLabel_->adjustSize();
+                return;
+            }
+        }
+        previewStack_->setCurrentWidget(preview_);
         preview_->setPlainText(QString::fromStdString(makePreview(decoded)));
     } else {
         std::string raw;
         if (pdf_.readStream(o, raw)) {
+            previewStack_->setCurrentWidget(preview_);
             preview_->setPlainText(
                 "[decode failed, showing raw bytes]\n" +
                 QString::fromStdString(makePreview(raw)));
         } else {
+            previewStack_->setCurrentWidget(preview_);
             preview_->setPlainText("could not read stream data");
         }
     }

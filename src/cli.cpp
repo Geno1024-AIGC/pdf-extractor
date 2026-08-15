@@ -24,6 +24,7 @@ void printHelp(const std::function<void(const std::string&)>& emit) {
     emit("commands:");
     emit("  open <file>        load a PDF file");
     emit("  list               list all parsed objects");
+    emit("  info               show file structure (xref/trailer)");
     emit("  preview <n>        show decoded content of object n");
     emit("  extract <n>        extract object n to the output dir");
     emit("  extract [ns...]    extract the given objects");
@@ -70,6 +71,22 @@ int execCommand(PdfFile* pdf, const std::string& cmd,
         }
         emit("opened " + args[1] + ": " +
              std::to_string(pdf->objects.size()) + " objects");
+        return 0;
+    }
+    if (!pdf->objects.empty() && c == "info") {
+        const auto& t = pdf->trailer;
+        emit("trailer: " + std::string(t.hasXref ? "xref table found" :
+                                                  "no classic xref"));
+        emit("  /Size " + std::to_string(t.size));
+        emit("  /Root " + std::to_string(t.root));
+        emit("  /Info " + std::to_string(t.info));
+        emit("  /Prev " + std::to_string(t.prev));
+        emit("xref entries: " + std::to_string(pdf->xref.size()));
+        for (const auto& e : pdf->xref) {
+            emit("  " + std::to_string(e.id) + " " + std::to_string(e.gen) +
+                 " " + std::to_string(e.offset) +
+                 (e.free ? " f" : " n"));
+        }
         return 0;
     }
     if (!pdf->objects.empty() && c == "list") {
@@ -181,6 +198,19 @@ int runCli(const std::vector<std::string>& args) {
         execCommand(&pdf, "list", outCb);
         return 0;
     }
+    if (!args.empty() && args[0] == "info") {
+        if (args.size() < 2) {
+            std::cerr << "usage: pdfx info <file.pdf>\n";
+            return 1;
+        }
+        target = args[1];
+        if (!pdf.load(target)) {
+            std::cerr << "load failed: " << pdf.error << "\n";
+            return 1;
+        }
+        execCommand(&pdf, "info", outCb);
+        return 0;
+    }
     if (!args.empty() && args[0] == "extract") {
         // pdfx extract <file.pdf> [object ids...]
         if (args.size() < 2) {
@@ -212,6 +242,7 @@ int runCli(const std::vector<std::string>& args) {
                  "  pdfx                       start the GUI\n"
                  "  pdfx <file.pdf>            open file in the GUI\n"
                  "  pdfx list <file.pdf>       list objects\n"
+                 "  pdfx info <file.pdf>       show file structure\n"
                  "  pdfx extract <file.pdf> [obj id...]  extract streams\n";
     return 2;
 }
