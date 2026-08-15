@@ -351,16 +351,21 @@ bool PdfFile::loadPath(const std::string& path) {
 #endif
 
     const std::regex objRe(R"((\d+)\s+(\d+)\s+obj(?=\s))");
-    const auto begin = std::sregex_iterator(data_.begin(), data_.end(), objRe);
-    const auto end = std::sregex_iterator();
+    std::sregex_iterator it(data_.begin(), data_.end(), objRe);
+    const std::sregex_iterator end;
+    // Sequential scan: after consuming an object we skip past its body so that
+    // "N G obj" text inside stream data / embedded content never matches.
+    size_t skipBefore = 0;
+    for (; it != end; ++it) {
+        const size_t mpos = it->position();
+        if (mpos < skipBefore) continue;
 
-    for (auto it = begin; it != end; ++it) {
         Object obj;
         obj.id = std::stoi((*it)[1].str());
         obj.gen = std::stoi((*it)[2].str());
-        obj.offset = static_cast<int64_t>(it->position());
+        obj.offset = static_cast<int64_t>(mpos);
 
-        Reader r{data_, static_cast<size_t>(obj.offset) + static_cast<size_t>(it->length())};
+        Reader r{data_, mpos + static_cast<size_t>(it->length())};
         r.skipWs();
 
         StreamMeta meta;
@@ -403,8 +408,20 @@ bool PdfFile::loadPath(const std::string& path) {
                 obj.rawLength = static_cast<int64_t>(
                     (found == std::string::npos ? data_.size() : found) - from);
             }
+            // Resume scanning only after this stream's data, so fake headers
+            // buried in the stream bytes cannot appear again on the object list.
+            const size_t dataEnd = static_cast<size_t>(obj.streamStart) +
+                                   static_cast<size_t>(obj.rawLength);
+            const size_t hit = data_.find("endstream", dataEnd);
+            const size_t endobj = data_.find("endobj",
+                                             hit == std::string::npos ? dataEnd
+                                                                      : hit);
+            skipBefore =
+                (endobj == std::string::npos ? dataEnd + 1 : endobj + 7);
         } else if (isDict) {
             obj.type = "dict";
+            const size_t endobj = data_.find("endobj", mpos);
+            skipBefore = endobj == std::string::npos ? mpos + 1 : endobj + 7;
         } else {
             r.skipWs();
             if (r.pos < data_.size() && data_[r.pos] == '[') obj.type = "array";
@@ -412,6 +429,8 @@ bool PdfFile::loadPath(const std::string& path) {
             else if (r.pos < data_.size() &&
                      (data_[r.pos] == '(' || data_[r.pos] == '<')) obj.type = "string";
             else obj.type = "atom";
+            const size_t endobj = data_.find("endobj", mpos);
+            skipBefore = endobj == std::string::npos ? mpos + 1 : endobj + 7;
         }
         objects.push_back(std::move(obj));
     }
