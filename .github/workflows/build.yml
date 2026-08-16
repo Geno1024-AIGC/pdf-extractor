@@ -9,7 +9,7 @@ jobs:
   linux-amd64:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install dependencies
         run: |
@@ -39,7 +39,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: pdf-extractor-linux-amd64
           path: build/pdfx
@@ -51,7 +51,7 @@ jobs:
       run:
         shell: msys2 {0}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: msys2/setup-msys2@v2
         with:
@@ -77,7 +77,7 @@ jobs:
           ./build/pdfx.exe list rich.pdf | grep -q "obj 3"
           ./build/pdfx.exe preview rich.pdf 3 | grep -q "hello pdf-extractor"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: pdf-extractor-windows-amd64
           path: build/pdfx.exe
