@@ -32,8 +32,12 @@ jobs:
 
       - name: Smoke test (GUI, offscreen)
         run: |
-          QT_QPA_PLATFORM=offscreen timeout 5 ./build/pdfx rich.pdf
-          test $? -eq 124
+          rc=0
+          QT_QPA_PLATFORM=offscreen timeout 5 ./build/pdfx rich.pdf || rc=$?
+          if [ "$rc" -ne 124 ]; then
+            echo "GUI exited on its own with code $rc before the timeout; expected it to keep running"
+            exit 1
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
