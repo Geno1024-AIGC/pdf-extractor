@@ -23,6 +23,8 @@ jobs:
         run: cmake --build build -j"$(nproc)"
 
       - name: Smoke test (CLI)
+        env:
+          QT_QPA_PLATFORM: offscreen
         run: |
           python3 tools/make_test_pdf.py
           ./build/pdfx list rich.pdf | grep -q "obj 3"
