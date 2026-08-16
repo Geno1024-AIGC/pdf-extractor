@@ -28,6 +28,9 @@ public:
                      const QString& label);
     void setContentBoxes(const std::vector<ContentBox>& boxes);
     void clearDiagram();
+    void setZoom(double zoom);
+    void setZoomActual();
+    double zoom() const { return zoom_; }
 
 signals:
     void pageClicked(int objId);
@@ -36,6 +39,7 @@ protected:
     void paintEvent(QPaintEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    void wheelEvent(QWheelEvent* event) override;
 
 private:
     void paintRect(QPainter& p, const QRect& r, const QString& text);
@@ -43,6 +47,7 @@ private:
 
     double w_ = 0;
     double h_ = 0;
+    double zoom_ = 1.0;
     int rotate_ = 0;
     QString sizeLabel_;
     bool treeMode_ = false;

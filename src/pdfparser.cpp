@@ -314,11 +314,13 @@ bool parseDict(Reader& r, StreamMeta* m) {
 
 }  // namespace
 
-bool PdfFile::load(const std::string& path) {
-    return loadPath(path);
+bool PdfFile::load(const std::string& path,
+                   const std::function<void(int, int)>& progress) {
+    return loadPath(path, progress);
 }
 
-bool PdfFile::loadPath(const std::string& path) {
+bool PdfFile::loadPath(const std::string& path,
+                       const std::function<void(int, int)>& progress) {
     // helper to read the whole file into data_
     auto readFile = [&](std::ifstream&& in) -> bool {
         if (!in) {
@@ -350,14 +352,31 @@ bool PdfFile::loadPath(const std::string& path) {
     if (!readFile(std::ifstream(path, std::ios::binary))) return false;
 #endif
 
+    // Drop any previously loaded document so a fresh open starts clean.
+    objects.clear();
+    xref.clear();
+    owner = XrefEntry{};
+    trailer = TrailerInfo{};
+    error.clear();
+
     const std::regex objRe(R"((\d+)\s+(\d+)\s+obj(?=\s))");
     std::sregex_iterator it(data_.begin(), data_.end(), objRe);
     const std::sregex_iterator end;
     // Sequential scan: after consuming an object we skip past its body so that
     // "N G obj" text inside stream data / embedded content never matches.
     size_t skipBefore = 0;
+    int lastPct = -1;
     for (; it != end; ++it) {
         const size_t mpos = it->position();
+        if (progress) {
+            const int pct = data_.empty()
+                                ? 100
+                                : static_cast<int>(mpos * 100 / data_.size());
+            if (pct != lastPct) {
+                lastPct = pct;
+                progress(pct, 100);
+            }
+        }
         if (mpos < skipBefore) continue;
 
         Object obj;
@@ -589,6 +608,14 @@ bool PdfFile::readObjectSource(const Object& obj, std::string& out) const {
     const size_t end = data_.find(mark, start);
     if (end == std::string::npos) return false;
     out = data_.substr(start, end - start);
+    return true;
+}
+
+bool PdfFile::readRawBytes(size_t offset, size_t length,
+                           std::string& out) const {
+    if (offset >= data_.size()) return false;
+    const size_t avail = data_.size() - offset;
+    out = data_.substr(offset, std::min(length, avail));
     return true;
 }
 

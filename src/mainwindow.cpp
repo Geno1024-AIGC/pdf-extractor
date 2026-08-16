@@ -2,8 +2,11 @@
 
 #include <QAbstractItemView>
 #include <QAction>
+#include <QActionGroup>
 #include <QApplication>
+#include <QClipboard>
 #include <QDir>
+#include <QDragEnterEvent>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -14,14 +17,17 @@
 #include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
+#include <QMimeData>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPen>
 #include <QPlainTextEdit>
 #include <QPoint>
+#include <QProgressDialog>
 #include <QPixmap>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QSettings>
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QTableWidgetItem>
@@ -29,6 +35,7 @@
 #include <QTreeWidgetItem>
 #include <QVariant>
 #include <QVBoxLayout>
+#include <QUrl>
 
 #include <cstdlib>
 #include <algorithm>
@@ -709,6 +716,21 @@ QScrollBar::handle:vertical {
 }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 QLabel { color: #9aa0c3; }
+QProgressDialog {
+    background-color: #1e1f29;
+    color: #e8e9f0;
+}
+QProgressBar {
+    background-color: #16171f;
+    border: 1px solid #2f3150;
+    border-radius: 6px;
+    text-align: center;
+    color: #9aa0c3;
+}
+QProgressBar::chunk {
+    background-color: #4a6cf7;
+    border-radius: 5px;
+}
 )QSS";
 
 // Light theme, applied when the user toggles the colour mode.
@@ -788,6 +810,21 @@ QScrollBar::handle:vertical {
 }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 QLabel { color: #44485c; }
+QProgressDialog {
+    background-color: #f5f6fa;
+    color: #22242e;
+}
+QProgressBar {
+    background-color: #ffffff;
+    border: 1px solid #c9cddd;
+    border-radius: 6px;
+    text-align: center;
+    color: #44485c;
+}
+QProgressBar::chunk {
+    background-color: #4a6cf7;
+    border-radius: 5px;
+}
 )QSS";
 
 }  // namespace
@@ -795,11 +832,12 @@ QLabel { color: #44485c; }
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle("PDF Extractor");
     outDir_ = QDir::currentPath();
+    zh_ = QSettings().value("language", "en").toString() == "zh";
 
     table_ = new QTableWidget(this);
-    table_->setColumnCount(6);
+    table_->setColumnCount(7);
     table_->setHorizontalHeaderLabels(
-        {"#", "Type", "Subtype", "Filter", "Size", "Offset"});
+        {"#", "Type", "/Type", "Subtype", "Filter", "Size", "Offset"});
     table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     table_->setSelectionBehavior(QAbstractItemView::SelectRows);
     table_->setSelectionMode(QAbstractItemView::SingleSelection);
@@ -830,6 +868,23 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     pageBox_ = new QWidget(this);
     auto* pageBoxLay = new QVBoxLayout(pageBox_);
     pageBoxLay->setContentsMargins(0, 0, 0, 0);
+    auto* zoomRow = new QHBoxLayout;
+    QPushButton* zoomInBtn = new QPushButton("+", pageBox_);
+    QPushButton* zoomOutBtn = new QPushButton(QString::fromUtf8("\u2212"), pageBox_);
+    QPushButton* zoomFitBtn = new QPushButton("1:1", pageBox_);
+    zoomInBtn->setFixedWidth(28);
+    zoomOutBtn->setFixedWidth(28);
+    zoomFitBtn->setFixedWidth(44);
+    connect(zoomInBtn, &QPushButton::clicked, this, &MainWindow::zoomIn);
+    connect(zoomOutBtn, &QPushButton::clicked, this,
+            &MainWindow::zoomOut);
+    connect(zoomFitBtn, &QPushButton::clicked, this,
+            &MainWindow::zoomOneToOne);
+    zoomRow->addWidget(zoomInBtn);
+    zoomRow->addWidget(zoomOutBtn);
+    zoomRow->addWidget(zoomFitBtn);
+    zoomRow->addStretch();
+    pageBoxLay->addLayout(zoomRow);
     pageBoxLay->addWidget(pageScroll_);
 
     previewTabs_ = new QTabWidget(this);
@@ -856,30 +911,55 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     status_ = new QLabel(this);
     status_->setText("ready");
+    setAcceptDrops(true);
 
-    auto* tabs = new QTabWidget(this);
-    tabs->addTab(previewTabs_, "Preview");
-    tabs->addTab(info_, "Info");
-    tabs->addTab(console_, "Console");
+    outerTabs_ = new QTabWidget(this);
+    outerTabs_->addTab(previewTabs_, "Preview");
+    outerTabs_->addTab(info_, "Info");
+    outerTabs_->addTab(console_, "Console");
 
     auto* cols = new QHBoxLayout;
-    cols->addWidget(table_, 3);
-    cols->addWidget(tabs, 2);
+    auto* tableCol = new QVBoxLayout;
+    filterEdit_ = new QLineEdit(this);
+    filterEdit_->setPlaceholderText(
+        tr_("Filter objects…", QString::fromUtf8("过滤对象…")));
+    tableCol->addWidget(filterEdit_);
+    tableCol->addWidget(table_, 1);
+    cols->addLayout(tableCol, 3);
+    cols->addWidget(outerTabs_, 2);
 
-    auto* fileMenu = menuBar()->addMenu("&File");
-    QAction* openAct = fileMenu->addAction("&Open PDF…", this,
-                                          &MainWindow::openPdf);
+    fileMenu_ = menuBar()->addMenu("&File");
+    QAction* openAct = fileMenu_->addAction(tr_("&Open PDF…", "打开 PDF…(&O)"),
+                                            this, &MainWindow::openPdf);
     openAct->setShortcut(QKeySequence::Open);
-    fileMenu->addAction("&Export All Images…", this,
-                        &MainWindow::exportAllImages);
-    fileMenu->addSeparator();
-    fileMenu->addAction("E&xit", qApp, &QApplication::quit);
-    auto* extractMenu = menuBar()->addMenu("E&xtract");
-    extractMenu->addAction("Extract &Selected…", this,
+    recentMenu_ = fileMenu_->addMenu(tr_("Recent Files", QString::fromUtf8("最近打开")));
+    fileMenu_->addSeparator();
+    fileMenu_->addAction(tr_("E&xit", "退出(&E)"), qApp,
+                         &QApplication::quit);
+    updateRecentMenu();
+    exportMenu_ = menuBar()->addMenu("&Export");
+    exportMenu_->addAction(tr_("&All Images…", "全部图片…(&A)"), this,
+                           &MainWindow::exportAllImages);
+    exportMenu_->addAction(tr_("&Selected…", "选中项…(&S)"), this,
                            &MainWindow::extractSelected);
-    auto* viewMenu = menuBar()->addMenu("&View");
-    viewMenu->addAction("Toggle &Dark / Light", this,
-                        &MainWindow::toggleTheme);
+    viewMenu_ = menuBar()->addMenu("&View");
+    viewMenu_->addAction(tr_("Toggle &Dark / Light", "切换深色 / 浅色(&D)"),
+                         this, &MainWindow::toggleTheme);
+    settingsMenu_ = menuBar()->addMenu(tr_("&Settings", "设置(&S)"));
+    auto* langMenu = settingsMenu_->addMenu(tr_("&Language", "语言(&L)"));
+    QActionGroup* langGroup = new QActionGroup(this);
+    langGroup->setExclusive(true);
+    QAction* enAct = langMenu->addAction("English");
+    QAction* zhAct = langMenu->addAction("简体中文");
+    enAct->setCheckable(true);
+    zhAct->setCheckable(true);
+    langGroup->addAction(enAct);
+    langGroup->addAction(zhAct);
+    (zh_ ? zhAct : enAct)->setChecked(true);
+    connect(enAct, &QAction::triggered, this,
+            [this] { setLanguage(false); });
+    connect(zhAct, &QAction::triggered, this,
+            [this] { setLanguage(true); });
 
     auto* cmdRow = new QHBoxLayout;
     cmdRow->addWidget(new QLabel(QString::fromUtf8("\u203a"), this));
@@ -895,12 +975,17 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setCentralWidget(central);
 
     connect(command_, &QLineEdit::returnPressed, this, &MainWindow::runCommand);
+    connect(filterEdit_, &QLineEdit::textChanged, this,
+            &MainWindow::applyFilter);
     connect(table_, &QTableWidget::itemSelectionChanged, this,
             &MainWindow::onRowChanged);
     connect(table_, &QTableWidget::itemActivated,
             [this](QTableWidgetItem*) { onRowChanged(); });
     connect(structView_, &QTreeWidget::itemActivated, this,
             [this](QTreeWidgetItem* it, int) { gotoRefItem(it); });
+    structView_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(structView_, &QWidget::customContextMenuRequested, this,
+            &MainWindow::showStructMenu);
     connect(pageDiagram_, &PageDiagram::pageClicked, this,
             [this](int id) {
                 for (int r = 0; r < table_->rowCount(); ++r) {
@@ -931,6 +1016,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     imageLabel_->installEventFilter(this);
 
     applyStyle();
+    retranslate();
     resize(1100, 640);
 }
 
@@ -959,13 +1045,94 @@ void MainWindow::toggleTheme() {
     applyStyle();
 }
 
+QString MainWindow::tr_(const QString& en, const QString& zh) const {
+    return zh_ ? zh : en;
+}
+
+void MainWindow::retranslate() {
+    setWindowTitle(tr_("PDF Extractor", QString::fromUtf8("PDF 提取器")));
+    fileMenu_->setTitle(tr_("&File", "文件(&F)"));
+    exportMenu_->setTitle(tr_("&Export", "导出(&E)"));
+    viewMenu_->setTitle(tr_("&View", "查看(&V)"));
+    if (settingsMenu_)
+        settingsMenu_->setTitle(tr_("&Settings", "设置(&S)"));
+    if (filterEdit_)
+        filterEdit_->setPlaceholderText(
+            tr_("Filter objects…", QString::fromUtf8("过滤对象…")));
+    if (recentMenu_)
+        recentMenu_->setTitle(tr_("Recent Files", QString::fromUtf8("最近打开")));
+    for (QAction* a : fileMenu_->actions()) {
+        if (a->text().contains("Open PDF")) {
+            a->setText(tr_("&Open PDF…", "打开 PDF…(&O)"));
+        } else if (a->text().contains("Exit")) {
+            a->setText(tr_("E&xit", "退出(&E)"));
+        }
+    }
+    for (QAction* a : exportMenu_->actions()) {
+        if (a->text().contains("All Images")) {
+            a->setText(tr_("&All Images…", "全部图片…(&A)"));
+        } else if (a->text().contains("Selected")) {
+            a->setText(tr_("&Selected…", "选中项…(&S)"));
+        }
+    }
+    for (QAction* a : viewMenu_->actions()) {
+        if (a->text().contains("Dark")) {
+            a->setText(tr_("Toggle &Dark / Light", "切换深色 / 浅色(&D)"));
+        }
+    }
+    previewTabs_->setTabText(0, tr_("Page", "页面"));
+    previewTabs_->setTabText(1, tr_("Structure", "结构"));
+    previewTabs_->setTabText(2, tr_("Text", "文本"));
+    previewTabs_->setTabText(3, tr_("Hex", "十六进制"));
+    previewTabs_->setTabText(4, tr_("Image", "图像"));
+    previewTabs_->setTabText(5, tr_("Content", "内容"));
+    if (outerTabs_) {
+        outerTabs_->setTabText(0, tr_("Preview", "预览"));
+        outerTabs_->setTabText(1, tr_("Info", "信息"));
+        outerTabs_->setTabText(2, tr_("Console", "控制台"));
+    }
+    status_->setText(tr_("ready", QString::fromUtf8("就绪")));
+}
+
+void MainWindow::setLanguage(bool zh) {
+    zh_ = zh;
+    QSettings s;
+    s.setValue("language", zh ? "zh" : "en");
+    s.sync();
+    retranslate();
+}
+
 void MainWindow::openPath(const QString& path) {
-    if (!pdf_.load(path.toStdString())) {
+    QProgressDialog dlg(
+        QString::fromUtf8("Opening %1…").arg(QFileInfo(path).fileName()),
+        QString(), 0, 100, this);
+    dlg.setWindowModality(Qt::WindowModal);
+    dlg.setCancelButton(nullptr);
+    dlg.setMinimumDuration(400);
+    const bool ok = pdf_.load(path.toStdString(), [&dlg](int done, int total) {
+        dlg.setValue(total > 0 ? done * 100 / total : 100);
+        QCoreApplication::processEvents();
+    });
+    dlg.setValue(100);
+    dlg.close();
+    if (!ok) {
         log("open failed: " + QString::fromStdString(pdf_.error));
         status_->setText("failed to open " + QFileInfo(path).fileName());
         return;
     }
+    currentFile_ = path;
     setWindowTitle("PDF Extractor - " + QFileInfo(path).fileName());
+    {
+        QStringList rec = QSettings().value("recent", QStringList())
+                              .toStringList();
+        rec.removeAll(path);
+        rec.prepend(path);
+        while (rec.size() > 10) rec.removeLast();
+        QSettings s;
+        s.setValue("recent", rec);
+        s.sync();
+    }
+    updateRecentMenu();
     fillTable();
     fillInfo();
     // Drop the previous file's inspector state so a fresh load starts clean.
@@ -997,11 +1164,75 @@ void MainWindow::openPath(const QString& path) {
                          .arg(nStream));
 }
 
+void MainWindow::zoomIn() {
+    pageDiagram_->setZoom(pageDiagram_->zoom() * 1.15);
+}
+
+void MainWindow::zoomOut() {
+    pageDiagram_->setZoom(pageDiagram_->zoom() / 1.15);
+}
+
+void MainWindow::zoomFit() {
+    pageDiagram_->setZoom(1.0);
+}
+
+void MainWindow::zoomOneToOne() {
+    pageDiagram_->setZoomActual();
+}
+
+void MainWindow::applyFilter() {
+    const QString q = filterEdit_->text().trimmed().toLower();
+    for (int r = 0; r < table_->rowCount(); ++r) {
+        bool hit = q.isEmpty();
+        if (!hit) {
+            for (int c = 0; c < table_->columnCount() && !hit; ++c) {
+                QTableWidgetItem* it = table_->item(r, c);
+                if (it && it->text().toLower().contains(q)) hit = true;
+            }
+        }
+        table_->setRowHidden(r, !hit);
+    }
+}
+
+void MainWindow::updateRecentMenu() {
+    if (!recentMenu_) return;
+    recentMenu_->clear();
+    const QStringList rec = QSettings().value("recent", QStringList())
+                                .toStringList();
+    for (const QString& p : rec) {
+        if (p.isEmpty()) continue;
+        QAction* a = recentMenu_->addAction(QFileInfo(p).fileName());
+        a->setToolTip(p);
+        connect(a, &QAction::triggered, this, [this, p] {
+            if (p != currentFile_) openPath(p);
+        });
+    }
+    if (recentMenu_->isEmpty()) {
+        recentMenu_->setEnabled(false);
+        recentMenu_->addAction(
+            tr_("(none)", QString::fromUtf8("（无）")))->setEnabled(false);
+    } else {
+        recentMenu_->setEnabled(true);
+    }
+}
+
 void MainWindow::openPdf() {
     const QString path = QFileDialog::getOpenFileName(
         this, "Open PDF", {}, "PDF files (*.pdf)");
     if (path.isEmpty()) return;
     openPath(path);
+}
+
+void MainWindow::openMostRecent() {
+    const QStringList rec =
+        QSettings().value("recent", QStringList()).toStringList();
+    for (const QString& p : rec) {
+        if (p.isEmpty()) continue;
+        if (QFile::exists(p)) {
+            openPath(p);
+            return;
+        }
+    }
 }
 
 void MainWindow::extractSelected() {
@@ -1031,13 +1262,45 @@ void MainWindow::exportAllImages() {
         status_->setText("no file loaded");
         return;
     }
+    // Prefer the original /XObject name (e.g. "/Im0") as the file stem. Scan
+    // page-level /Resources -> /XObject maps and collect obj id -> name.
+    std::map<long long, std::string> xname;
+    for (const auto& o : pdf_.objects) {
+        if (o.isStream) continue;
+        std::string src;
+        if (!pdf_.readObjectSource(o, src)) continue;
+        std::map<std::string, long long> xo;
+        resolveXObjectMap(pdf_, src, xo);
+        for (const auto& kv : xo)
+            if (!xname.count(kv.second)) xname[kv.second] = kv.first;
+    }
     const QString dir = QFileDialog::getExistingDirectory(
         this, "Export all images to directory", outDir_);
     if (dir.isEmpty()) return;
     outDir_ = dir;
+    QFileInfo fi(currentFile_);
+    const QString sub =
+        fi.baseName().trimmed().isEmpty() ? QString("images") : fi.baseName();
+    const QString outDir = QDir::cleanPath(dir + "/" + sub);
+    QDir().mkpath(outDir);
+    int total = 0;
+    for (const auto& o : pdf_.objects)
+        if (o.isStream && o.subtype == "Image") ++total;
+    QProgressDialog dlg(
+        total == 0 ? QString("Exporting images…")
+                   : QString::fromUtf8("Exporting %1 image(s)…").arg(total),
+        QString(), 0, total > 0 ? total : 1, this);
+    dlg.setWindowModality(Qt::WindowModal);
+    dlg.setCancelButton(nullptr);
+    dlg.setMinimumDuration(400);
+    dlg.show();
     int saved = 0;
+    int done = 0;
     for (const auto& o : pdf_.objects) {
         if (!o.isStream || o.subtype != "Image") continue;
+        ++done;
+        dlg.setValue(total > 0 ? done : 1);
+        QCoreApplication::processEvents();
         const QImage img = renderObjectImage(pdf_, o);
         if (img.isNull()) {
             log("obj " + QString::number(o.id) + ": image render failed");
@@ -1057,8 +1320,12 @@ void MainWindow::exportAllImages() {
                 break;
             }
         }
-        const QString path =
-            dir + "/image_" + QString::number(o.id) + "." + ext;
+        const auto nit = xname.find(o.id);
+        const QString stem =
+            nit != xname.end()
+                ? QString::fromStdString(nit->second)
+                : QString("image_") + QString::number(o.id);
+        const QString path = outDir + "/" + stem + "." + ext;
         if (img.save(path, fmt.toLatin1().constData())) {
             ++saved;
             log("exported obj " + QString::number(o.id) + " -> " + path);
@@ -1066,6 +1333,7 @@ void MainWindow::exportAllImages() {
             log("obj " + QString::number(o.id) + ": save failed");
         }
     }
+    dlg.close();
     status_->setText(QString("exported %1 image(s)").arg(saved));
 }
 
@@ -1076,6 +1344,7 @@ void MainWindow::fillTable() {
         QStringList cells = {
             QString::number(o.id),
             QString::fromStdString(o.type),
+            o.typeName.empty() ? QString("-") : "/" + QString::fromStdString(o.typeName),
             QString::fromStdString(o.subtype),
             filterText(o),
             o.isStream ? QString::number(o.rawLength) : QString("-"),
@@ -1111,19 +1380,72 @@ void MainWindow::fillInfo() {
                     .arg(e.offset)
                     .arg(e.free ? "free" : "live");
     }
-    // consistency: which scanned objects are referenced in the xref?
-    int inXref = 0;
-    for (const auto& o : pdf_.objects) {
-        for (const auto& e : pdf_.xref) {
-            if (!e.free && e.id == o.id) {
-                ++inXref;
-                break;
+    // Referential integrity: xref live entries with no scanned object, and
+    // scanned objects unreachable from the xref.
+    std::set<int> scanned;
+    for (const auto& o : pdf_.objects) scanned.insert(o.id);
+    std::set<int> liveXref;
+    for (const auto& e : pdf_.xref)
+        if (!e.free) liveXref.insert(e.id);
+    std::vector<int> dangling;
+    for (int id : liveXref)
+        if (!scanned.count(id)) dangling.push_back(id);
+    std::vector<int> orphans;
+    for (int id : scanned)
+        if (!liveXref.count(id)) orphans.push_back(id);
+    text += QString("Consistency:\n");
+    if (t.hasXref) {
+        text += QString("  xref live entries not found in scan: %1\n")
+                    .arg(dangling.size());
+        for (int id : dangling)
+            text += QString("    xref %1 has no scanned object\n").arg(id);
+        text += QString("  scanned objects absent from xref: %1\n")
+                    .arg(orphans.size());
+        for (int id : orphans)
+            text += QString("    obj %1 not in xref\n").arg(id);
+        if (t.root > 0 && !scanned.count(t.root))
+            text += "  /Root " + QString::number(t.root) +
+                    " is not a scanned object\n";
+        if (t.info > 0 && !scanned.count(t.info))
+            text += "  /Info " + QString::number(t.info) +
+                    " is not a scanned object\n";
+        text += "  (orphans are generally harmless — streams are skipped\n";
+        text += "   during scan when the xref points past 'endstream')";
+    } else {
+        text += "  (no classic xref to check against)";
+    }
+    // /Info dictionary: title, author, etc. when present.
+    if (t.info > 0) {
+        for (const auto& o : pdf_.objects) {
+            if (o.id != t.info) continue;
+            std::string src;
+            if (!o.isStream && pdf_.readObjectSource(o, src)) {
+                const auto dm = parseTopDict(src);
+                auto get = [&](const char* key) -> QString {
+                    const auto it = dm.find(key);
+                    if (it == dm.end()) return QString();
+                    for (const PdfToken& v : it->second) {
+                        if (v.kind == PdfToken::String)
+                            return QString::fromStdString(v.text);
+                        if (v.kind == PdfToken::Name)
+                            return QString("/") +
+                                   QString::fromStdString(v.text);
+                    }
+                    return QString();
+                };
+                text += QString("\n/Info metadata:\n");
+                const struct { const char* k; } keys[] = {
+                    {"Title"}, {"Author"}, {"Subject"}, {"Creator"},
+                    {"Producer"}, {"CreationDate"}, {"ModDate"}};
+                for (const auto& k : keys) {
+                    const QString v = get(k.k);
+                    if (!v.isEmpty())
+                        text += QString("  /%1: %2\n").arg(k.k).arg(v);
+                }
             }
+            break;
         }
     }
-    text += QString("Scanned objects matched by xref: %1/%2\n")
-                .arg(inXref)
-                .arg(pdf_.objects.size());
     info_->setPlainText(text);
 }
 
@@ -1463,7 +1785,121 @@ void MainWindow::showTableMenu(const QPoint& pos) {
     table_->setCurrentItem(item);
     QMenu menu(this);
     menu.addAction("Save raw stream…", this, &MainWindow::saveContextObject);
+    menu.addAction("Show raw bytes at offset…", this,
+                   &MainWindow::jumpToRawOffset);
     menu.exec(table_->viewport()->mapToGlobal(pos));
+}
+
+void MainWindow::jumpToRawOffset() {
+    int id = contextObjId_;
+    if (id <= 0) {
+        const int row = table_->currentRow();
+        if (row >= 0 && row < table_->rowCount() && table_->item(row, 0))
+            id = table_->item(row, 0)->data(Qt::UserRole).toInt();
+    }
+    if (id <= 0) return;
+    const Object* found = nullptr;
+    for (const auto& o : pdf_.objects) {
+        if (o.id == id) {
+            found = &o;
+            break;
+        }
+    }
+    if (!found || found->offset < 0) return;
+    std::string raw;
+    if (!pdf_.readRawBytes(static_cast<size_t>(found->offset), 1024, raw))
+        return;
+    hexView_->setPlainText(hexDump(raw, 4096));
+    previewTabs_->setCurrentIndex(3);
+    status_->setText(QString("raw bytes at offset %1 (obj %2)")
+                         .arg(found->offset)
+                         .arg(id));
+}
+
+void MainWindow::showStructMenu(const QPoint& pos) {
+    QTreeWidgetItem* item = structView_->itemAt(pos);
+    if (!item) return;
+    structView_->setCurrentItem(item);
+    QMenu menu(this);
+    menu.addAction("Copy subtree as JSON", this, &MainWindow::copySubtreeJson);
+    menu.addAction("Copy subtree as text", this, &MainWindow::copySubtreeText);
+    menu.exec(structView_->viewport()->mapToGlobal(pos));
+}
+
+namespace {
+// Recursively render a structure-tree item to a JSON fragment.
+void itemToJson(QTreeWidgetItem* it, bool isArray, QString& out) {
+    if (it->childCount() == 0) {
+        const QString val = it->text(1);
+        if (val.isEmpty() == false && val[0] >= '0' && val[0] <= '9' &&
+            val[0].isDigit())
+            out += val;  // bare number
+        else
+            out += "\"" + val + "\"";
+        return;
+    }
+    // Does this node mirror an array (numeric keys) or a dict?
+    bool arr = true;
+    for (int i = 0; i < it->childCount(); ++i) {
+        bool ok = false;
+        it->child(i)->text(0).toInt(&ok);
+        if (!ok) {
+            arr = false;
+            break;
+        }
+    }
+    if (!isArray) {
+        if (arr) {
+            out += "[";
+            for (int i = 0; i < it->childCount(); ++i) {
+                if (i) out += ", ";
+                itemToJson(it->child(i), true, out);
+            }
+            out += "]";
+        } else {
+            out += "{";
+            for (int i = 0; i < it->childCount(); ++i) {
+                if (i) out += ", ";
+                out += "\"" + it->child(i)->text(0) + "\": ";
+                itemToJson(it->child(i), false, out);
+            }
+            out += "}";
+        }
+    } else {
+        // Inside an array the children carry numeric keys; emit each value.
+        for (int i = 0; i < it->childCount(); ++i) {
+            if (i) out += ", ";
+            itemToJson(it->child(i), false, out);
+        }
+    }
+}
+
+void itemToText(QTreeWidgetItem* it, int depth, QString& out) {
+    for (int i = 0; i < it->childCount(); ++i) {
+        QTreeWidgetItem* c = it->child(i);
+        out += QString(depth * 2, ' ') + c->text(0) + " = " + c->text(1) +
+               "\n";
+        itemToText(c, depth + 1, out);
+    }
+}
+}  // namespace
+
+void MainWindow::copySubtreeJson() {
+    QTreeWidgetItem* item = structView_->currentItem();
+    if (!item) return;
+    QString out;
+    itemToJson(item, false, out);
+    QApplication::clipboard()->setText(out);
+    status_->setText("copied subtree as JSON");
+}
+
+void MainWindow::copySubtreeText() {
+    QTreeWidgetItem* item = structView_->currentItem();
+    if (!item) return;
+    QString out;
+    itemToText(item, 0, out);
+    QApplication::clipboard()->setText(out);
+    status_->setText("copied subtree as text");
 }
 
 void MainWindow::showPreviewMenu(const QPoint& pos) {
@@ -1544,6 +1980,33 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
     if (obj == imageLabel_ && event->type() == QEvent::Resize)
         updateImageLabel();
     return QMainWindow::eventFilter(obj, event);
+}
+
+void MainWindow::dragEnterEvent(QDragEnterEvent* event) {
+    const QList<QUrl> urls = event->mimeData()->urls();
+    for (const QUrl& u : urls) {
+        if (!u.isLocalFile()) continue;
+        if (QFileInfo(u.toLocalFile()).suffix().compare("pdf",
+                                                        Qt::CaseInsensitive) == 0) {
+            event->acceptProposedAction();
+            return;
+        }
+    }
+    QMainWindow::dragEnterEvent(event);
+}
+
+void MainWindow::dropEvent(QDropEvent* event) {
+    const QList<QUrl> urls = event->mimeData()->urls();
+    for (const QUrl& u : urls) {
+        if (!u.isLocalFile()) continue;
+        const QString path = u.toLocalFile();
+        if (QFileInfo(path).suffix().compare("pdf", Qt::CaseInsensitive) == 0) {
+            if (path != currentFile_) openPath(path);
+            event->acceptProposedAction();
+            return;
+        }
+    }
+    QMainWindow::dropEvent(event);
 }
 
 void MainWindow::runCommand() {

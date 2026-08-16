@@ -5,6 +5,7 @@
 #include <QPainterPath>
 #include <QPen>
 #include <QRect>
+#include <QWheelEvent>
 
 #include <algorithm>
 #include <cmath>
@@ -23,16 +24,42 @@ void PageDiagram::setBox(double w, double h, int rotate,
     boxRects_.clear();
     // Give the widget a real footprint inside the scroll area; without this
     // (non-resizable) it collapses to a tiny sliver and shows plain dark.
-    const double scale = std::min(1.0, 600.0 / h_);
+    const double scale = std::min(1.0, 600.0 / h_) * zoom_;
     const int dw = std::max(120, static_cast<int>(w_ * scale) + 48);
     const int dh = std::max(90, static_cast<int>(h_ * scale) + 48);
     setFixedSize(dw, dh);
     update();
 }
 
+void PageDiagram::setZoom(double zoom) {
+    zoom_ = std::max(0.1, std::min(4.0, zoom));
+    if (!treeMode_ && w_ > 0 && h_ > 0) {
+        const double scale = std::min(1.0, 600.0 / h_) * zoom_;
+        const int dw = std::max(120, static_cast<int>(w_ * scale) + 48);
+        const int dh = std::max(90, static_cast<int>(h_ * scale) + 48);
+        setFixedSize(dw, dh);
+    }
+    update();
+}
+
+void PageDiagram::setZoomActual() {
+    if (h_ > 0) setZoom(1.0 / std::min(1.0, 600.0 / h_));
+}
+
+void PageDiagram::wheelEvent(QWheelEvent* event) {
+    if (treeMode_) {
+        QWidget::wheelEvent(event);
+        return;
+    }
+    const double factor = event->angleDelta().y() > 0 ? 1.15 : 1.0 / 1.15;
+    setZoom(zoom_ * factor);
+    event->accept();
+}
+
 void PageDiagram::setPageTree(int count, const std::vector<int>& kids,
                               const QString& label) {
     treeMode_ = true;
+    zoom_ = 1.0;
     treeCount_ = count;
     kids_ = kids;
     sizeLabel_ = label;

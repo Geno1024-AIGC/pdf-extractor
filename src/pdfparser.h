@@ -2,6 +2,7 @@
 #define PDFPARSER_H
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -54,11 +55,13 @@ public:
 
     // Load a PDF file: scan all top-level objects and classify them.
     // Returns false (with error set) if the file is not a PDF.
-    bool load(const std::string& path);
+    bool load(const std::string& path,
+              const std::function<void(int, int)>& progress = {});
 
     // Load from a native path (Unicode-safe on Windows via wide chars).
     // Falls back to load(path) on platforms without wide file support.
-    bool loadPath(const std::string& path);
+    bool loadPath(const std::string& path,
+                  const std::function<void(int, int)>& progress = {});
 
     // Raw undecoded stream bytes for a stream object.
     bool readStream(const Object& obj, std::string& out) const;
@@ -70,6 +73,10 @@ public:
     // (for streams, up to the closing "endstream\nendobj"). Suitable for
     // showing dict / array object contents in the preview.
     bool readObjectSource(const Object& obj, std::string& out) const;
+
+    // Copy up to `length` raw bytes of the loaded file starting at `offset`
+    // into `out`. Returns false when the range is out of bounds.
+    bool readRawBytes(size_t offset, size_t length, std::string& out) const;
 
 private:
     void parseXrefAndTrailer();

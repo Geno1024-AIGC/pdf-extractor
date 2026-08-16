@@ -29,9 +29,68 @@ void printHelp(const std::function<void(const std::string&)>& emit) {
     emit("  extract <n>        extract object n to the output dir");
     emit("  extract [ns...]    extract the given objects");
     emit("  extractall         extract every stream object");
+    emit("  export <n>         export one stream object (image) by id");
+    emit("  tree <n>           show the structure tree of an object");
     emit("  out <dir>          set the output directory");
     emit("  help               show this help");
     emit("  quit               exit");
+}
+
+// Minimal structural pretty-printer: re-indent the source of a small object
+// so nested dicts/arrays become a readable tree.
+void printTreeText(const std::string& src,
+                   const std::function<void(const std::string&)>& emit) {
+    auto indent = [](int n) { return std::string(static_cast<size_t>(n) * 2, ' '); };
+    int depth = 0;
+    std::string tok;
+    auto flush = [&] {
+        if (tok.empty()) return;
+        emit(indent(depth) + tok);
+        tok.clear();
+    };
+    char prev = 0;
+    for (char ch : src) {
+        if (ch == '<' && prev == '<') {
+            tok.pop_back();  // drop the '<' that opened this pair
+            flush();
+            ++depth;
+            emit(indent(depth) + "<<");
+            prev = 0;
+            continue;
+        }
+        if (ch == '>' && prev == '>') {
+            tok.pop_back();
+            flush();
+            --depth;
+            if (depth < 0) depth = 0;
+            emit(indent(depth) + ">>");
+            prev = 0;
+            continue;
+        }
+        if (ch == '[') {
+            flush();
+            ++depth;
+            emit(indent(depth) + "[");
+            prev = 0;
+            continue;
+        }
+        if (ch == ']') {
+            flush();
+            --depth;
+            if (depth < 0) depth = 0;
+            emit(indent(depth) + "]");
+            prev = 0;
+            continue;
+        }
+        if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') {
+            flush();
+            prev = 0;
+            continue;
+        }
+        tok += ch;
+        prev = ch;
+    }
+    if (!tok.empty()) emit(indent(depth) + tok);
 }
 
 bool tryParseInt(const std::string& s, int& v) {
@@ -145,6 +204,66 @@ int execCommand(PdfFile* pdf, const std::string& cmd,
         emit("output dir: " + args[1]);
         return 0;
     }
+    if (c == "export") {
+        if (args.size() < 2) {
+            emit("usage: export <n>");
+            return 1;
+        }
+        int id;
+        if (!tryParseInt(args[1], id)) {
+            emit("export: bad number '" + args[1] + "'");
+            return 0;
+        }
+        const Object* found = nullptr;
+        for (const auto& o : pdf->objects) {
+            if (o.id == id) {
+                found = &o;
+                break;
+            }
+        }
+        if (!found) {
+            emit("no object " + std::to_string(id));
+            return 0;
+        }
+        if (!found->isStream) {
+            emit("object " + std::to_string(id) +
+                 " is not a stream (type " + found->type + ")");
+            return 0;
+        }
+        const std::string f = extractStream(*pdf, *found, ".");
+        if (!f.empty()) {
+            emit("exported obj " + std::to_string(id) + " -> " + f);
+        } else {
+            emit("export obj " + std::to_string(id) + " failed");
+        }
+        return 0;
+    }
+    if (c == "tree") {
+        if (args.size() < 2) {
+            emit("usage: tree <n>");
+            return 1;
+        }
+        int id;
+        if (!tryParseInt(args[1], id)) {
+            emit("tree: bad number '" + args[1] + "'");
+            return 0;
+        }
+        for (const auto& o : pdf->objects) {
+            if (o.id != id) continue;
+            std::string src;
+            if (!pdf->readObjectSource(o, src)) {
+                emit("object " + std::to_string(id) +
+                     " has no readable source");
+                return 0;
+            }
+            emit("=== object " + std::to_string(id) + " (type " + o.type +
+                 ") ===");
+            printTreeText(src, emit);
+            return 0;
+        }
+        emit("no object " + std::to_string(id));
+        return 0;
+    }
     if (c == "extract" || c == "extractall") {
         // extract [n n n ...]   -- extract given object ids (or all)
         std::vector<int> ids;
@@ -232,11 +351,38 @@ int runCli(const std::vector<std::string>& args) {
         execCommand(&pdf, spec, outCb);
         return 0;
     }
+    if (!args.empty() && args[0] == "export") {
+        // pdfx export <file.pdf> <id>
+        if (args.size() < 3) {
+            std::cerr << "usage: pdfx export <file.pdf> <id>\n";
+            return 1;
+        }
+        target = args[1];
+        if (!pdf.load(target)) {
+            std::cerr << "load failed: " << pdf.error << "\n";
+            return 1;
+        }
+        return execCommand(&pdf, "export " + args[2], outCb);
+    }
+    if (!args.empty() && args[0] == "tree") {
+        // pdfx tree <file.pdf> <id>
+        if (args.size() < 3) {
+            std::cerr << "usage: pdfx tree <file.pdf> <id>\n";
+            return 1;
+        }
+        target = args[1];
+        if (!pdf.load(target)) {
+            std::cerr << "load failed: " << pdf.error << "\n";
+            return 1;
+        }
+        return execCommand(&pdf, "tree " + args[2], outCb);
+    }
     // No arguments (or explicit "gui") -> launch the GUI.
     if (args.empty() || args[0] == "gui") return -1;
 
     // bare ".pdf" argument (not a subcommand) -> open it in the GUI
     if (args[0] != "list" && args[0] != "extract" && args[0] != "info" &&
+        args[0] != "export" && args[0] != "tree" &&
         (args[0].size() > 4 && args[0].rfind(".pdf") != std::string::npos)) {
         return -1;
     }
@@ -246,7 +392,9 @@ int runCli(const std::vector<std::string>& args) {
                  "  pdfx <file.pdf>            open file in the GUI\n"
                  "  pdfx list <file.pdf>       list objects\n"
                  "  pdfx info <file.pdf>       show file structure\n"
-                 "  pdfx extract <file.pdf> [obj id...]  extract streams\n";
+                 "  pdfx extract <file.pdf> [obj id...]  extract streams\n"
+                 "  pdfx export <file.pdf> <id>           export one stream\n"
+                 "  pdfx tree <file.pdf> <id>             show object tree\n";
     return 2;
 }
 

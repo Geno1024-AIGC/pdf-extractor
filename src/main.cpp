@@ -24,6 +24,8 @@ std::vector<std::string> appArgs(int argc, char** argv) {
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
+    QCoreApplication::setOrganizationName("pdf-extractor");
+    QCoreApplication::setApplicationName("pdf-extractor");
     const std::vector<std::string> args = appArgs(argc, argv);
 
     int rc = runCli(args);
@@ -32,6 +34,9 @@ int main(int argc, char** argv) {
     MainWindow w;
     if (rc == -1 && !args.empty() && args[0] != "gui") {
         w.openPath(QString::fromStdString(args[0]));
+    } else {
+        // No file argument: reopen the most recent file, if any.
+        w.openMostRecent();
     }
     w.show();
     return app.exec();
