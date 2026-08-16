@@ -10,9 +10,13 @@ namespace pdfx {
 // descriptor. Covers the compact font format used by Adobe Type 1 fonts and
 // CIDFontType0 fonts (the default for LaTeX/xeLaTeX PDFs).
 struct CffInfo {
-    std::vector<std::string> fontNames;   // from the Name INDEX
-    std::vector<std::string> strings;     // from the String INDEX
-    int glyphCount = 0;                   // entries in the CharStrings INDEX
+    std::vector<std::string> fontNames;    // from the Name INDEX
+    std::vector<std::string> strings;      // from the String INDEX
+    int glyphCount = 0;                    // entries in the CharStrings INDEX
+    // Per-glyph interpretation: a display name (from the charset/String INDEX)
+    // and the disassembled Type 2 charstring program. Parallel to the glyphs.
+    std::vector<std::string> glyphNames;
+    std::vector<std::string> glyphPrograms;
     bool ok = false;
 };
 

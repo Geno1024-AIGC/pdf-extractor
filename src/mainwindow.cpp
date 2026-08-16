@@ -1881,6 +1881,20 @@ void MainWindow::populateFonts(const Object& o, const std::string& decoded) {
             for (const auto& n : cff.fontNames)
                 text += QString("  %1\n").arg(QString::fromStdString(n));
             text += QString("\nGlyphs: %1\n").arg(cff.glyphCount);
+            if (!cff.glyphNames.empty()) {
+                text += "\nGlyph programs (Type 2 charstrings):\n";
+                const int shown = std::min(cff.glyphCount, 64);
+                for (int i = 0; i < shown; ++i) {
+                    text += QString("  %1 %2\n")
+                                .arg(QString::fromStdString(cff.glyphNames[
+                                    static_cast<size_t>(i)]))
+                                .arg(QString::fromStdString(cff.glyphPrograms[
+                                    static_cast<size_t>(i)]));
+                }
+                if (shown < cff.glyphCount)
+                    text += QString("  … %1 more glyphs\n")
+                                .arg(cff.glyphCount - shown);
+            }
             if (!cff.strings.empty()) {
                 text += "\nString INDEX:\n";
                 int shown = 0;
