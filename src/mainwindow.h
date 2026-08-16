@@ -65,6 +65,7 @@ private:
     void applyStyle();
     void fillTable();
     void showObject(const Object& o);
+    void populateFonts(const Object& o, const std::string& decoded);
     void fillInfo();
     void log(const QString& text);
     void updateImageLabel();
@@ -83,6 +84,7 @@ private:
     CodeEditor* preview_;
     CodeEditor* hexView_;
     CodeEditor* contentView_;
+    CodeEditor* fontView_;
     CodeEditor* info_;
     QLabel* imageLabel_;
     QScrollArea* imageScroll_;

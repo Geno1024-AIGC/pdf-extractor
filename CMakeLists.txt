@@ -27,6 +27,8 @@ add_executable(pdfx
     src/extractor.h
     src/filters.cpp
     src/filters.h
+    src/cff.cpp
+    src/cff.h
     src/mainwindow.cpp
     src/mainwindow.h
     src/codeeditor.cpp

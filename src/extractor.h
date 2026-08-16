@@ -29,6 +29,10 @@ std::string extractStream(const PdfFile& pdf, const class Object& obj,
 std::string makePreview(const std::string& decoded, size_t maxBytes = 4096,
                         bool withLineNumbers = true);
 
+// Extract the strings shown by Tj/TJ/\' operators in a PDF content stream.
+// Returns the decoded text runs (in show order); empty when none found.
+std::vector<std::string> extractShownText(const std::string& content);
+
 }  // namespace pdfx
 
 #endif  // EXTRACTOR_H

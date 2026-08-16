@@ -160,4 +160,123 @@ std::string makePreview(const std::string& decoded, size_t maxBytes,
     return out;
 }
 
+std::vector<std::string> extractShownText(const std::string& content) {
+    std::vector<std::string> out;
+    size_t i = 0;
+    const size_t n = content.size();
+    auto isDelim = [](char c) {
+        return c == '(' || c == ')' || c == '<' || c == '>' || c == '[' ||
+               c == ']' || c == '{' || c == '}' || c == '/' || c == '%';
+    };
+    while (i < n) {
+        const char c = content[i];
+        if (c == '\n' || c == '\r' || c == '\t' || c == ' ') {
+            ++i;
+            continue;
+        }
+        if (c == '%') {  // comment
+            while (i < n && content[i] != '\n') ++i;
+            continue;
+        }
+        if (c == '(') {
+            // Literal string: '(' ... ')' with \ escapes and balanced parens.
+            ++i;
+            std::string s;
+            int depth = 1;
+            while (i < n && depth > 0) {
+                const char ch = content[i++];
+                if (ch == '\\') {
+                    if (i >= n) break;
+                    const char e = content[i++];
+                    switch (e) {
+                        case 'n': s += '\n'; break;
+                        case 'r': s += '\r'; break;
+                        case 't': s += '\t'; break;
+                        case 'b': s += '\b'; break;
+                        case 'f': s += '\f'; break;
+                        case '(': s += '('; break;
+                        case ')': s += ')'; break;
+                        case '\\': s += '\\'; break;
+                        default:
+                            if (e >= '0' && e <= '7') {
+                                int oct = e - '0';
+                                int k = 1;
+                                while (k < 3 && i < n && content[i] >= '0' &&
+                                       content[i] <= '7') {
+                                    oct = oct * 8 + (content[i] - '0');
+                                    ++i;
+                                    ++k;
+                                }
+                                s += static_cast<char>(oct);
+                            } else {
+                                s += e;
+                            }
+                    }
+                } else if (ch == '(') {
+                    ++depth;
+                    s += ch;
+                } else if (ch == ')') {
+                    --depth;
+                    if (depth == 0) break;
+                    s += ch;
+                } else {
+                    s += ch;
+                }
+            }
+            out.push_back(s);
+            continue;
+        }
+        if (c == '<') {
+            // Either a hex string or a dictionary. A dict is "<<...>>"; a hex
+            // string is "<hexdigits>".
+            if (i + 1 < n && content[i + 1] == '<') {
+                size_t j = i + 2;
+                while (j + 1 < n && !(content[j] == '>' && content[j + 1] == '>'))
+                    ++j;
+                i = (j + 2 <= n) ? j + 2 : j;
+                continue;
+            }
+            ++i;
+            std::string hex;
+            while (i < n && content[i] != '>') hex += content[i++];
+            ++i;  // skip '>'
+            std::string s;
+            size_t hi = 0;
+            while (hi + 1 < hex.size()) {
+                auto nib = [&](char h) -> int {
+                    if (h >= '0' && h <= '9') return h - '0';
+                    if (h >= 'a' && h <= 'f') return h - 'a' + 10;
+                    if (h >= 'A' && h <= 'F') return h - 'A' + 10;
+                    return -1;
+                };
+                const int hi_ = nib(hex[hi]);
+                const int lo = nib(hex[hi + 1]);
+                if (hi_ >= 0 && lo >= 0)
+                    s += static_cast<char>((hi_ << 4) | lo);
+                hi += 2;
+            }
+            out.push_back(s);
+            continue;
+        }
+        if (isDelim(c)) {
+            ++i;
+            continue;
+        }
+        // Any other token (operator such as Tj/TJ/Tf/...) is irrelevant:
+        // the strings have already been collected in stream order above.
+        while (i < n && !isDelim(content[i]) && content[i] != '\n' &&
+               content[i] != '\r' && content[i] != '\t' && content[i] != ' ')
+            ++i;
+    }
+    // Remove the NUL padding bytes often appended by some producers.
+    std::vector<std::string> cleaned;
+    cleaned.reserve(out.size());
+    for (std::string& s : out) {
+        while (!s.empty() && (s.back() == '\0' || (unsigned char)s.back() == 0xff))
+            s.pop_back();
+        cleaned.push_back(s);
+    }
+    return cleaned;
+}
+
 }  // namespace pdfx

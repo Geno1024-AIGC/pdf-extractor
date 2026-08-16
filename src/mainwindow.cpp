@@ -46,6 +46,7 @@
 #include "cli.h"
 #include "extractor.h"
 #include "pagediagram.h"
+#include "cff.h"
 
 namespace pdfx {
 
@@ -878,6 +879,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     preview_ = new CodeEditor(this);
     hexView_ = new CodeEditor(this);
     contentView_ = new CodeEditor(this);
+    fontView_ = new CodeEditor(this);
 
     imageLabel_ = new QLabel(this);
     imageLabel_->setAlignment(Qt::AlignCenter);
@@ -933,6 +935,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     previewTabs_->addTab(hexView_, "Hex");
     previewTabs_->addTab(imageScroll_, "Image");
     previewTabs_->addTab(contentView_, "Content");
+    previewTabs_->addTab(fontView_, "Fonts");
     previewTabs_->setTabVisible(0, false);
     previewTabs_->setTabEnabled(0, false);
     previewTabs_->setCurrentIndex(1);
@@ -1124,6 +1127,7 @@ void MainWindow::retranslate() {
     previewTabs_->setTabText(3, tr_("Hex", "十六进制"));
     previewTabs_->setTabText(4, tr_("Image", "图像"));
     previewTabs_->setTabText(5, tr_("Content", "内容"));
+    previewTabs_->setTabText(6, tr_("Fonts", "字体"));
     if (outerTabs_) {
         outerTabs_->setTabText(0, tr_("Preview", "预览"));
         outerTabs_->setTabText(1, tr_("Info", "信息"));
@@ -1513,10 +1517,13 @@ void MainWindow::showObject(const Object& o) {
     // Text tab: decoded stream (text streams) or raw object source (others).
     preview_->clear();
     contentView_->clear();
+    fontView_->clear();
     previewTabs_->setTabEnabled(4, false);
     previewTabs_->setTabVisible(4, false);
     previewTabs_->setTabEnabled(5, false);
     previewTabs_->setTabVisible(5, false);
+    previewTabs_->setTabEnabled(6, false);
+    previewTabs_->setTabVisible(6, false);
 
     if (o.isStream) {
         std::string decoded;
@@ -1524,6 +1531,7 @@ void MainWindow::showObject(const Object& o) {
             preview_->setPlainText(
                 QString::fromStdString(makePreview(decoded, 8192, false)));
             hexView_->setPlainText(hexDump(decoded, 65536));
+            populateFonts(o, decoded);
         } else {
             std::string raw;
             if (pdf_.readStream(o, raw)) {
@@ -1859,6 +1867,58 @@ void MainWindow::updateImageLabel() {
     imageLabel_->setPixmap(
         imagePixmap_.scaled(want, Qt::KeepAspectRatio,
                             Qt::SmoothTransformation));
+}
+
+void MainWindow::populateFonts(const Object& o, const std::string& decoded) {
+    QString text;
+
+    // Embedded CFF font (Type 1C / CIDFontType0C): parse font name + strings.
+    if (o.subtype == "Type1C" || o.subtype == "CIDFontType0C") {
+        CffInfo cff;
+        if (parseCff(decoded, cff)) {
+            text += "CFF font (Type1C / CIDFontType0C)\n\n";
+            text += "Font name:\n";
+            for (const auto& n : cff.fontNames)
+                text += QString("  %1\n").arg(QString::fromStdString(n));
+            text += QString("\nGlyphs: %1\n").arg(cff.glyphCount);
+            if (!cff.strings.empty()) {
+                text += "\nString INDEX:\n";
+                int shown = 0;
+                for (const auto& s : cff.strings) {
+                    if (shown >= 500) {
+                        text += QString("  … %1 more\n")
+                                    .arg(cff.strings.size() - shown);
+                        break;
+                    }
+                    text += QString("  %1\n")
+                                .arg(QString::fromStdString(s)
+                                         .replace(QChar('\n'), "\\n"));
+                    ++shown;
+                }
+            }
+            fontView_->setPlainText(text);
+            previewTabs_->setTabVisible(6, true);
+            previewTabs_->setTabEnabled(6, true);
+            return;
+        }
+        text += "CFF font (Type1C / CIDFontType0C) — parse failed\n\n";
+        fontView_->setPlainText(text);
+        previewTabs_->setTabVisible(6, true);
+        previewTabs_->setTabEnabled(6, true);
+        return;
+    }
+
+    // Otherwise treat it as a content stream: show the Tj/TJ strings, when any.
+    const auto runs = extractShownText(decoded);
+    QString joined;
+    for (const auto& r : runs) joined += QString::fromStdString(r);
+    if (joined.isEmpty()) return;  // keep the Fonts tab hidden
+    text += "Text shown by Tj/TJ operators (decoded):\n\n";
+    text += joined;
+    text += "\n";
+    fontView_->setPlainText(text);
+    previewTabs_->setTabVisible(6, true);
+    previewTabs_->setTabEnabled(6, true);
 }
 
 void MainWindow::showTableMenu(const QPoint& pos) {
