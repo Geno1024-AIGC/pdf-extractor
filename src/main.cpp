@@ -34,9 +34,6 @@ int main(int argc, char** argv) {
     MainWindow w;
     if (rc == -1 && !args.empty() && args[0] != "gui") {
         w.openPath(QString::fromStdString(args[0]));
-    } else {
-        // No file argument: reopen the most recent file, if any.
-        w.openMostRecent();
     }
     w.show();
     return app.exec();

@@ -667,6 +667,22 @@ QPushButton:disabled {
     border-color: #30314a;
     color: #6f7180;
 }
+QPushButton#zoomBtn {
+    background-color: #2d2f43;
+    border: 1px solid #3a3d55;
+    border-radius: 6px;
+    padding: 0 6px;
+    min-width: 26px;
+    min-height: 26px;
+    font-size: 15px;
+    font-weight: 700;
+    color: #e8e9f0;
+}
+QPushButton#zoomBtn:hover {
+    background-color: #3a3d55;
+    border-color: #565a7d;
+}
+QPushButton#zoomBtn:pressed { background-color: #23243a; }
 QTableWidget {
     background-color: #23243a;
     alternate-background-color: #292a44;
@@ -757,10 +773,26 @@ QPushButton:hover {
 }
 QPushButton:pressed { background-color: #cfd3e0; }
 QPushButton:disabled {
-    background-color: #f0f1f6;
-    border-color: #d8dae4;
-    color: #a3a6b4;
+    background-color: #eef0f6;
+    border-color: #d4d8e5;
+    color: #a8acbb;
 }
+QPushButton#zoomBtn {
+    background-color: #ffffff;
+    border: 1px solid #c9cddd;
+    border-radius: 6px;
+    padding: 0 6px;
+    min-width: 26px;
+    min-height: 26px;
+    font-size: 15px;
+    font-weight: 700;
+    color: #22242e;
+}
+QPushButton#zoomBtn:hover {
+    background-color: #eef0f6;
+    border-color: #a9aec9;
+}
+QPushButton#zoomBtn:pressed { background-color: #e2e5f0; }
 QTableWidget {
     background-color: #ffffff;
     alternate-background-color: #eef0f7;
@@ -872,9 +904,15 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     QPushButton* zoomInBtn = new QPushButton("+", pageBox_);
     QPushButton* zoomOutBtn = new QPushButton(QString::fromUtf8("\u2212"), pageBox_);
     QPushButton* zoomFitBtn = new QPushButton("1:1", pageBox_);
-    zoomInBtn->setFixedWidth(28);
-    zoomOutBtn->setFixedWidth(28);
-    zoomFitBtn->setFixedWidth(44);
+    zoomInBtn->setObjectName("zoomBtn");
+    zoomOutBtn->setObjectName("zoomBtn");
+    zoomFitBtn->setObjectName("zoomBtn");
+    zoomInBtn->setFixedWidth(30);
+    zoomOutBtn->setFixedWidth(30);
+    zoomFitBtn->setFixedWidth(48);
+    zoomInBtn->setToolTip("Zoom in");
+    zoomOutBtn->setToolTip("Zoom out");
+    zoomFitBtn->setToolTip("Reset to actual size");
     connect(zoomInBtn, &QPushButton::clicked, this, &MainWindow::zoomIn);
     connect(zoomOutBtn, &QPushButton::clicked, this,
             &MainWindow::zoomOut);
@@ -1209,11 +1247,39 @@ void MainWindow::updateRecentMenu() {
     }
     if (recentMenu_->isEmpty()) {
         recentMenu_->setEnabled(false);
-        recentMenu_->addAction(
-            tr_("(none)", QString::fromUtf8("（无）")))->setEnabled(false);
-    } else {
-        recentMenu_->setEnabled(true);
+        return;
     }
+    recentMenu_->addSeparator();
+    // Remove one entry.
+    QMenu* removeMenu = recentMenu_->addMenu(
+        tr_("Remove entry…", QString::fromUtf8("移除一条…")));
+    for (const QString& p : rec) {
+        if (p.isEmpty()) continue;
+        QAction* r = removeMenu->addAction(QFileInfo(p).fileName());
+        r->setToolTip(p);
+        connect(r, &QAction::triggered, this, [this, p] { removeRecent(p); });
+    }
+    // Remove all entries.
+    QAction* clearAct = recentMenu_->addAction(
+        tr_("Clear recent files…", QString::fromUtf8("清除全部历史…")));
+    connect(clearAct, &QAction::triggered, this, [this] {
+        QSettings s;
+        s.setValue("recent", QStringList());
+        s.sync();
+        updateRecentMenu();
+    });
+    recentMenu_->setEnabled(true);
+}
+
+// Remove one path from the persisted recent-files list.
+void MainWindow::removeRecent(const QString& path) {
+    QStringList rec = QSettings().value("recent", QStringList())
+                          .toStringList();
+    rec.removeAll(path);
+    QSettings s;
+    s.setValue("recent", rec);
+    s.sync();
+    updateRecentMenu();
 }
 
 void MainWindow::openPdf() {
@@ -1221,18 +1287,6 @@ void MainWindow::openPdf() {
         this, "Open PDF", {}, "PDF files (*.pdf)");
     if (path.isEmpty()) return;
     openPath(path);
-}
-
-void MainWindow::openMostRecent() {
-    const QStringList rec =
-        QSettings().value("recent", QStringList()).toStringList();
-    for (const QString& p : rec) {
-        if (p.isEmpty()) continue;
-        if (QFile::exists(p)) {
-            openPath(p);
-            return;
-        }
-    }
 }
 
 void MainWindow::extractSelected() {

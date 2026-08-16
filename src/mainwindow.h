@@ -30,10 +30,6 @@ public:
     explicit MainWindow(QWidget* parent = nullptr);
     void openPath(const QString& path);
 
-    // Open the most recently used file, if any. Called at startup when no
-    // file was given on the command line. No-op when there is no history.
-    void openMostRecent();
-
 private slots:
     void openPdf();
     void extractSelected();
@@ -43,6 +39,7 @@ private slots:
     void onRowChanged();
     void applyFilter();
     void updateRecentMenu();
+    void removeRecent(const QString& path);
     void showTableMenu(const QPoint& pos);
     void showPreviewMenu(const QPoint& pos);
     void showImageMenu(const QPoint& pos);
