@@ -1693,11 +1693,15 @@ void MainWindow::showObject(const Object& o) {
         if (isPage || isPages) {
             if (isPage) {
                 pageDiagram_->setBox(mb[2] - mb[0], mb[3] - mb[1], rotate,
-                                     QString("Page %1  pt").arg(o.id));
+                                     QString("Page %1  pt  (%2 x %3)")
+                                         .arg(o.id)
+                                         .arg(mb[2] - mb[0], 0, 'g', 3)
+                                         .arg(mb[3] - mb[1], 0, 'g', 3));
             } else {
                 // Walk the whole subtree: from this /Pages node descend through
                 // /Kids (page or nested Pages nodes) and collect every /Page.
                 std::vector<int> pageIds;
+                std::vector<QString> pageSizes;
                 std::function<void(long long)> walk = [&](long long cur) {
                     for (const Object& po : pdf_.objects) {
                         if (po.id != cur) continue;
@@ -1707,6 +1711,8 @@ void MainWindow::showObject(const Object& o) {
                         const auto pm = parseTopDict(psrc);
                         std::string ptype;
                         std::vector<int> pkids;
+                        double pmb[4] = {0, 0, 0, 0};
+                        int vals = 0;
                         for (const auto& kv : pm) {
                             const std::string& pk = kv.first;
                             const auto& val = kv.second;
@@ -1721,10 +1727,31 @@ void MainWindow::showObject(const Object& o) {
                                     if (v.kind == PdfToken::Ref)
                                         pkids.push_back(
                                             static_cast<int>(v.refId));
+                            } else if (pk == "MediaBox") {
+                                for (const PdfToken& v : val) {
+                                    if (v.kind != PdfToken::Number) continue;
+                                    if (vals < 4) {
+                                        try {
+                                            pmb[vals] = std::stod(v.text);
+                                        } catch (...) {
+                                            pmb[vals] = 0;
+                                        }
+                                        ++vals;
+                                    }
+                                }
                             }
                         }
                         if (ptype == "Page") {
                             pageIds.push_back(static_cast<int>(cur));
+                            if (vals == 4) {
+                                pageSizes.push_back(QString("%1 x %2")
+                                                        .arg(pmb[2] - pmb[0], 0,
+                                                             'g', 3)
+                                                        .arg(pmb[3] - pmb[1], 0,
+                                                             'g', 3));
+                            } else {
+                                pageSizes.push_back(QString());
+                            }
                         } else {
                             for (int kid : pkids) walk(kid);
                         }
@@ -1734,11 +1761,13 @@ void MainWindow::showObject(const Object& o) {
                 for (int kid : kids) walk(kid);
                 if (pageIds.empty() && countDir > 0) {
                     // Fall back to /Count if the tree could not be walked.
-                    for (int i = 0; i < countDir; ++i)
+                    for (int i = 0; i < countDir; ++i) {
                         pageIds.push_back(static_cast<int>(o.id));
+                        pageSizes.push_back(QString());
+                    }
                 }
                 pageDiagram_->setPageTree(static_cast<int>(pageIds.size()),
-                                          pageIds,
+                                          pageIds, pageSizes,
                                           QString("Pages tree  obj %1")
                                               .arg(o.id));
             }

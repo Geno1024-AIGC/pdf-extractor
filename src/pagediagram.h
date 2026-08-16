@@ -24,7 +24,10 @@ public:
 
     explicit PageDiagram(QWidget* parent = nullptr);
     void setBox(double w, double h, int rotate, const QString& sizeLabel);
+    // ratios[i] parallels kids[i] and holds a compact "612 x 792" size label
+    // for the i-th page; empty entries are drawn without a size line.
     void setPageTree(int count, const std::vector<int>& kids,
+                     const std::vector<QString>& ratios,
                      const QString& label);
     void setContentBoxes(const std::vector<ContentBox>& boxes);
     void clearDiagram();
@@ -42,7 +45,8 @@ protected:
     void wheelEvent(QWheelEvent* event) override;
 
 private:
-    void paintRect(QPainter& p, const QRect& r, const QString& text);
+    void paintRect(QPainter& p, const QRect& r, const QString& text,
+                   const QString& sub = QString());
     void computeTiles();
     void applyTreeSize();
 
@@ -54,6 +58,7 @@ private:
     bool treeMode_ = false;
     int treeCount_ = 0;
     std::vector<int> kids_;
+    std::vector<QString> ratios_;  // parallel to kids_: page size text per tile
     std::vector<QRect> tiles_;  // grid tile geometry for hit-testing
     std::vector<ContentBox> contentBoxes_;  // user-space overlays
     std::vector<QRect> boxRects_;           // screen rects for hit-testing

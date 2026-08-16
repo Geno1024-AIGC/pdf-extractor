@@ -76,11 +76,15 @@ void PageDiagram::wheelEvent(QWheelEvent* event) {
 }
 
 void PageDiagram::setPageTree(int count, const std::vector<int>& kids,
+                              const std::vector<QString>& ratios,
                               const QString& label) {
     treeMode_ = true;
     zoom_ = 1.0;
     treeCount_ = count;
     kids_ = kids;
+    ratios_.clear();
+    ratios_.reserve(ratios.size());
+    for (const QString& r : ratios) ratios_.push_back(r);
     sizeLabel_ = label;
     // Do not cap the height here: the widget is hosted in a scroll area, so a
     // long tree can scroll instead of being clipped.
@@ -105,7 +109,8 @@ void PageDiagram::setContentBoxes(const std::vector<ContentBox>& boxes) {
     update();
 }
 
-void PageDiagram::paintRect(QPainter& p, const QRect& r, const QString& text) {
+void PageDiagram::paintRect(QPainter& p, const QRect& r, const QString& text,
+                            const QString& sub) {
     p.setPen(QPen(QColor(0x9a, 0xa0, 0xc3), 1));
     p.setBrush(QColor(0x3a, 0x3d, 0x55));
     p.drawRect(r);
@@ -114,6 +119,16 @@ void PageDiagram::paintRect(QPainter& p, const QRect& r, const QString& text) {
     f.setPixelSize(10);
     p.setFont(f);
     p.drawText(r, Qt::AlignCenter, text);
+    if (!sub.isEmpty()) {
+        QFont sf = p.font();
+        sf.setPixelSize(8);
+        sf.setBold(false);
+        p.setFont(sf);
+        QRect sr(r);
+        sr.adjust(0, 6, 0, 0);
+        p.setPen(QColor(0x6f, 0x72, 0x8f));
+        p.drawText(sr, Qt::AlignCenter, sub);
+    }
 }
 
 void PageDiagram::computeTiles() {
@@ -163,9 +178,12 @@ void PageDiagram::paintEvent(QPaintEvent*) {
         for (int i = 0; i < treeCount_; ++i) {
             const int kid =
                 i < static_cast<int>(kids_.size()) ? kids_[i] : 0;
+            const QString ratio =
+                i < static_cast<int>(ratios_.size()) ? ratios_[i] : QString();
             paintRect(p, tiles_[i],
                       kid ? QString("obj %1").arg(kid)
-                          : QString("#%1").arg(i + 1));
+                          : QString("#%1").arg(i + 1),
+                      ratio);
         }
         p.setPen(QColor(0x9a, 0xa0, 0xc3));
         p.drawText(rect(), Qt::AlignHCenter | Qt::AlignBottom,
