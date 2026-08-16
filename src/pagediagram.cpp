@@ -33,7 +33,9 @@ void PageDiagram::setBox(double w, double h, int rotate,
 
 void PageDiagram::setZoom(double zoom) {
     zoom_ = std::max(0.1, std::min(4.0, zoom));
-    if (!treeMode_ && w_ > 0 && h_ > 0) {
+    if (treeMode_) {
+        applyTreeSize();
+    } else if (w_ > 0 && h_ > 0) {
         const double scale = std::min(1.0, 600.0 / h_) * zoom_;
         const int dw = std::max(120, static_cast<int>(w_ * scale) + 48);
         const int dh = std::max(90, static_cast<int>(h_ * scale) + 48);
@@ -43,7 +45,24 @@ void PageDiagram::setZoom(double zoom) {
 }
 
 void PageDiagram::setZoomActual() {
-    if (h_ > 0) setZoom(1.0 / std::min(1.0, 600.0 / h_));
+    if (treeMode_) {
+        setZoom(1.0);
+    } else if (h_ > 0) {
+        setZoom(1.0 / std::min(1.0, 600.0 / h_));
+    }
+}
+
+void PageDiagram::applyTreeSize() {
+    const int cols = 6;
+    const int rows = (treeCount_ + cols - 1) / cols;
+    const int tileW = std::max(16, static_cast<int>(46 * zoom_));
+    const int tileH = std::max(20, static_cast<int>(56 * zoom_));
+    const int gap = std::max(2, static_cast<int>(8 * zoom_));
+    const int gw = cols * tileW + (cols - 1) * gap;
+    const int gh = rows * tileH + (rows - 1) * gap;
+    setMinimumWidth(gw + 48);
+    setMinimumHeight(gh + 34);
+    computeTiles();
 }
 
 void PageDiagram::wheelEvent(QWheelEvent* event) {
@@ -65,14 +84,9 @@ void PageDiagram::setPageTree(int count, const std::vector<int>& kids,
     sizeLabel_ = label;
     // Do not cap the height here: the widget is hosted in a scroll area, so a
     // long tree can scroll instead of being clipped.
-    const int rows = (count + 5) / 6;
-    const int need = rows * 56 + (rows - 1) * 8 + 34;
-    setMinimumHeight(std::max(90, need));
     setMaximumHeight(16777215);
-    // Keep the 6-column grid fully visible horizontally once laid out.
-    setMinimumWidth(6 * 46 + 5 * 8 + 48);
     setMaximumWidth(16777215);
-    computeTiles();
+    applyTreeSize();
     update();
 }
 
@@ -107,9 +121,9 @@ void PageDiagram::computeTiles() {
     if (!treeMode_) return;
     const int cols = 6;
     const int rows = (treeCount_ + cols - 1) / cols;
-    const int gap = 8;
-    const int tileW = 46;
-    const int tileH = 56;
+    const int gap = std::max(2, static_cast<int>(8 * zoom_));
+    const int tileW = std::max(16, static_cast<int>(46 * zoom_));
+    const int tileH = std::max(20, static_cast<int>(56 * zoom_));
     const int gw = cols * tileW + (cols - 1) * gap;
     const int gh = rows * tileH + (rows - 1) * gap;
     const int gx = (width() - gw) / 2;

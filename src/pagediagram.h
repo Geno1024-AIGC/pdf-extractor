@@ -44,6 +44,7 @@ protected:
 private:
     void paintRect(QPainter& p, const QRect& r, const QString& text);
     void computeTiles();
+    void applyTreeSize();
 
     double w_ = 0;
     double h_ = 0;
