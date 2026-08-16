@@ -1,0 +1,78 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux-amd64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qtbase5-dev zlib1g-dev
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Smoke test (CLI)
+        run: |
+          python3 tools/make_test_pdf.py
+          ./build/pdfx list rich.pdf | grep -q "obj 3"
+          ./build/pdfx preview rich.pdf 3 | grep -q "hello pdf-extractor"
+
+      - name: Smoke test (GUI, offscreen)
+        run: |
+          QT_QPA_PLATFORM=offscreen timeout 5 ./build/pdfx rich.pdf
+          test $? -eq 124
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pdf-extractor-linux-amd64
+          path: build/pdfx
+          if-no-files-found: error
+
+  windows-amd64:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-qt5
+            mingw-w64-x86_64-zlib
+            python
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/mingw64
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Smoke test (CLI)
+        run: |
+          python tools/make_test_pdf.py
+          ./build/pdfx.exe list rich.pdf | grep -q "obj 3"
+          ./build/pdfx.exe preview rich.pdf 3 | grep -q "hello pdf-extractor"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pdf-extractor-windows-amd64
+          path: build/pdfx.exe
+          if-no-files-found: error
