@@ -351,6 +351,19 @@ int runCli(const std::vector<std::string>& args) {
         execCommand(&pdf, spec, outCb);
         return 0;
     }
+    if (!args.empty() && args[0] == "preview") {
+        // pdfx preview <file.pdf> <id>
+        if (args.size() < 3) {
+            std::cerr << "usage: pdfx preview <file.pdf> <id>\n";
+            return 1;
+        }
+        target = args[1];
+        if (!pdf.load(target)) {
+            std::cerr << "load failed: " << pdf.error << "\n";
+            return 1;
+        }
+        return execCommand(&pdf, "preview " + args[2], outCb);
+    }
     if (!args.empty() && args[0] == "export") {
         // pdfx export <file.pdf> <id>
         if (args.size() < 3) {
@@ -383,6 +396,7 @@ int runCli(const std::vector<std::string>& args) {
     // bare ".pdf" argument (not a subcommand) -> open it in the GUI
     if (args[0] != "list" && args[0] != "extract" && args[0] != "info" &&
         args[0] != "export" && args[0] != "tree" &&
+        args[0] != "preview" &&
         (args[0].size() > 4 && args[0].rfind(".pdf") != std::string::npos)) {
         return -1;
     }
@@ -392,6 +406,7 @@ int runCli(const std::vector<std::string>& args) {
                  "  pdfx <file.pdf>            open file in the GUI\n"
                  "  pdfx list <file.pdf>       list objects\n"
                  "  pdfx info <file.pdf>       show file structure\n"
+                 "  pdfx preview <file.pdf> <id>          show decoded stream\n"
                  "  pdfx extract <file.pdf> [obj id...]  extract streams\n"
                  "  pdfx export <file.pdf> <id>           export one stream\n"
                  "  pdfx tree <file.pdf> <id>             show object tree\n";
