@@ -77,8 +77,23 @@ jobs:
           ./build/pdfx.exe list rich.pdf | grep -q "obj 3"
           ./build/pdfx.exe preview rich.pdf 3 | grep -q "hello pdf-extractor"
 
+      - name: Package (bundle Qt, MinGW runtime, zlib)
+        run: |
+          mkdir -p dist/pdfx
+          cp build/pdfx.exe dist/pdfx/
+          # zlib + MinGW C/C++ runtime DLLs (windeployqt does not know about them)
+          cp /mingw64/bin/zlib1.dll \
+             /mingw64/bin/libgcc_s_seh-1.dll \
+             /mingw64/bin/libstdc++-1.dll \
+             /mingw64/bin/libwinpthread-1.dll dist/pdfx/
+          # Qt runtime DLLs + platform plugins (qwindows.dll etc.)
+          windeployqt --release --compiler-runtime --no-translations \
+            --no-system-d3d-compiler --no-opengl-sw dist/pdfx/pdfx.exe
+          echo "bundled files:"
+          ls -la dist/pdfx dist/pdfx/platforms
+
       - uses: actions/upload-artifact@v7
         with:
           name: pdf-extractor-windows-amd64
-          path: build/pdfx.exe
+          path: dist/pdfx
           if-no-files-found: error
