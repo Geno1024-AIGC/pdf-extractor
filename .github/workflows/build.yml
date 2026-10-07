@@ -81,11 +81,12 @@ jobs:
         run: |
           mkdir -p dist/pdfx
           cp build/pdfx.exe dist/pdfx/
-          # zlib + MinGW C/C++ runtime DLLs (windeployqt does not know about them)
-          cp /mingw64/bin/zlib1.dll \
-             /mingw64/bin/libgcc_s_seh-1.dll \
-             /mingw64/bin/libstdc++-1.dll \
-             /mingw64/bin/libwinpthread-1.dll dist/pdfx/
+          # zlib + MinGW C/C++ runtime DLLs (windeployqt does not know about zlib;
+          # globs guard against exact runtime file names changing)
+          cp /mingw64/bin/zlib*.dll \
+             /mingw64/bin/libgcc*.dll \
+             /mingw64/bin/libstdc++*.dll \
+             /mingw64/bin/libwinpthread*.dll dist/pdfx/
           # Qt runtime DLLs + platform plugins (qwindows.dll etc.)
           windeployqt --release --compiler-runtime --no-translations \
             --no-system-d3d-compiler --no-opengl-sw dist/pdfx/pdfx.exe
